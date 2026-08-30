@@ -61,7 +61,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
     def test_repository_matches_the_approved_inventory(self) -> None:
         outcome = validator.validate_inventory(ROOT)
         self.assertTrue(outcome["ok"], outcome["errors"])
-        self.assertEqual(59, outcome["expected"])
+        self.assertEqual(60, outcome["expected"])
         self.assertIn(".github/actionlint.yaml", validator.EXPECTED_INVENTORY)
         self.assertIn(".github/workflows/self-test.yml", validator.EXPECTED_INVENTORY)
         self.assertIn("policy/tests/reusable_workflow_interface_test.rego", validator.EXPECTED_INVENTORY)
@@ -213,7 +213,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
 
     def test_all_repository_workflows_have_bounded_concurrency(self) -> None:
         workflow_paths = sorted((ROOT / ".github/workflows").glob("*.yml"))
-        self.assertEqual(8, len(workflow_paths))
+        self.assertEqual(9, len(workflow_paths))
         for path in workflow_paths:
             with self.subTest(workflow=path.name):
                 document, parse_error = validator._parsed_yaml(path, ROOT)

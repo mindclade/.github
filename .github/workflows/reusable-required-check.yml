@@ -116,26 +116,8 @@ concurrency:
 permissions: {}
 
 jobs:
-  prepare:
-    name: Validate required-check trust boundary
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    outputs:
-      execution_tier: ${{ steps.context.outputs.execution_tier }}
-    steps:
-      - id: context
-        name: Validate caller context
-        uses: $/.github/actions/validate-trusted-context
-        with:
-          expected-source-revision: ${{ inputs.source_revision }}
-      - name: Verify immutable implementation closure
-        uses: $/.github/actions/verify-pinned-actions
-
   required:
     name: Mindclade / Required
-    needs: prepare
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     permissions:
@@ -157,13 +139,11 @@ jobs:
     steps:
       - id: context
         name: Validate caller context
-        continue-on-error: true
         uses: $/.github/actions/validate-trusted-context
         with:
           expected-source-revision: ${{ inputs.source_revision }}
       - id: pins
         name: Verify immutable implementation closure
-        continue-on-error: true
         uses: $/.github/actions/verify-pinned-actions
       - id: preflight
         name: Validate immutable bindings before network access
@@ -201,6 +181,7 @@ jobs:
           BUILDKITE_PIPELINE: ${{ secrets.buildkite_pipeline }}
           CONTEXT_DIGEST: ${{ inputs.context_digest }}
           CORRELATION_ID: ${{ inputs.correlation_id }}
+          EXPECTED_SOURCE_REVISION: ${{ inputs.source_revision }}
           EXPECTED_PIPELINE_DEFINITION_REVISION: ${{ inputs.pipeline_definition_revision }}
           IMPLEMENTATION_ROOT: ${{ steps.context.outputs.implementation_root }}
           PIPELINE_DEFINITION_REVISION: ${{ inputs.pipeline_definition_revision }}
@@ -297,8 +278,8 @@ jobs:
 
   archive:
     name: Archive protected CI evidence
-    needs: [prepare, required]
-    if: needs.prepare.outputs.execution_tier == 'trusted' || needs.prepare.outputs.execution_tier == 'release'
+    needs: required
+    if: inputs.archive_evidence && needs.required.result == 'success' && (needs.required.outputs.execution_tier == 'trusted' || needs.required.outputs.execution_tier == 'release')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

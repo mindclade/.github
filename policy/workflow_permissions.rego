@@ -15,7 +15,8 @@ protected_tier_guards := {
   "needs.prepare.outputs.execution_tier == 'trusted' || needs.prepare.outputs.execution_tier == 'release'",
   "needs.prepare.outputs.execution_tier == 'release' || needs.prepare.outputs.execution_tier == 'trusted'",
   "needs.prepare.result == 'success' && (needs.prepare.outputs.execution_tier == 'trusted' || needs.prepare.outputs.execution_tier == 'release')",
-  "needs.prepare.result == 'success' && (needs.prepare.outputs.execution_tier == 'release' || needs.prepare.outputs.execution_tier == 'trusted')"
+  "needs.prepare.result == 'success' && (needs.prepare.outputs.execution_tier == 'release' || needs.prepare.outputs.execution_tier == 'trusted')",
+  "inputs.archive_evidence && needs.required.result == 'success' && (needs.required.outputs.execution_tier == 'trusted' || needs.required.outputs.execution_tier == 'release')"
 }
 
 workflow_data := input.workflow if {
@@ -32,7 +33,15 @@ permissions := workflow_data.permissions if {
 
 trusted_context_producer if {
   not "env" in object.keys(workflow_data)
-  prepare := workflow_data.jobs.prepare
+  trusted_context_job(workflow_data.jobs.prepare)
+}
+
+trusted_context_producer if {
+  not "env" in object.keys(workflow_data)
+  trusted_context_job(workflow_data.jobs.required)
+}
+
+trusted_context_job(prepare) if {
   is_object(prepare)
   prepare["runs-on"] == "ubuntu-24.04"
   not "env" in object.keys(prepare)

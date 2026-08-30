@@ -96,6 +96,7 @@ PROTECTED_TIER_GUARDS = frozenset({
     "needs.prepare.outputs.execution_tier == 'release' || needs.prepare.outputs.execution_tier == 'trusted'",
     "needs.prepare.result == 'success' && (needs.prepare.outputs.execution_tier == 'trusted' || needs.prepare.outputs.execution_tier == 'release')",
     "needs.prepare.result == 'success' && (needs.prepare.outputs.execution_tier == 'release' || needs.prepare.outputs.execution_tier == 'trusted')",
+    "inputs.archive_evidence && needs.required.result == 'success' && (needs.required.outputs.execution_tier == 'trusted' || needs.required.outputs.execution_tier == 'release')",
 })
 APPROVED_EXTERNAL_REFERENCES = {
     "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",
@@ -122,6 +123,7 @@ EXPECTED_INVENTORY = frozenset(
         ".github/actions/publish-ci-evidence/README.md",
         ".github/workflows/reusable-buildkite-dispatch.yml",
         ".github/workflows/reusable-required-check.yml",
+        ".github/workflows/reusable-nix-validation.yml",
         ".github/workflows/reusable-metadata-validation.yml",
         ".github/workflows/reusable-documentation-check.yml",
         ".github/workflows/reusable-dependency-review.yml",
@@ -875,7 +877,7 @@ def _has_protected_tier_guard(condition: str) -> bool:
 def _has_trusted_context_producer(document: Any, jobs: Any) -> bool:
     if not isinstance(document, dict) or "env" in document or not isinstance(jobs, dict):
         return False
-    prepare = jobs.get("prepare")
+    prepare = jobs.get("prepare") or jobs.get("required")
     if not isinstance(prepare, dict):
         return False
     if prepare.get("continue-on-error", False) is not False:
@@ -1062,6 +1064,11 @@ def _required_check_archive_errors(document: dict[str, Any], relative: Path) -> 
         and step["uses"].startswith("google-github-actions/auth@")
     ]
     errors: list[str] = []
+    expected_job_guard = "inputs.archive_evidence && needs.required.result == 'success' && (needs.required.outputs.execution_tier == 'trusted' || needs.required.outputs.execution_tier == 'release')"
+    if archive.get("needs") != "required":
+        errors.append(f"{prefix} job must depend only on required")
+    if archive.get("if") != expected_job_guard:
+        errors.append(f"{prefix} job must use the exact activation and trusted-tier guard")
     if len(validation_steps) != 1:
         errors.append(f"{prefix} must have exactly one handoff validation step")
     if len(auth_steps) != 1:

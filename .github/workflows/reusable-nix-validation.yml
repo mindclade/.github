@@ -1,0 +1,163 @@
+name: Reusable Nix validation
+
+on:
+  workflow_call:
+    inputs:
+      source_revision:
+        description: Exact caller source commit SHA.
+        required: true
+        type: string
+    outputs:
+      correlation_id:
+        description: Stable correlation identifier.
+        value: ${{ jobs.validate.outputs.correlation_id }}
+      source_revision:
+        description: Validated source revision.
+        value: ${{ jobs.validate.outputs.source_revision }}
+      caller_repository:
+        description: Validated caller repository.
+        value: ${{ jobs.validate.outputs.caller_repository }}
+      trust_classification:
+        description: Observed source trust classification.
+        value: ${{ jobs.validate.outputs.trust_classification }}
+      execution_tier:
+        description: Observed execution tier.
+        value: ${{ jobs.validate.outputs.execution_tier }}
+      plan_id:
+        description: Nix validation plan identifier.
+        value: ${{ jobs.validate.outputs.plan_id }}
+      build_id:
+        description: Provider build identifier.
+        value: ${{ jobs.validate.outputs.build_id }}
+      conclusion:
+        description: Normalized conclusion.
+        value: ${{ jobs.validate.outputs.conclusion }}
+      reason_code:
+        description: Stable conclusion reason.
+        value: ${{ jobs.validate.outputs.reason_code }}
+      evidence_digest:
+        description: Canonical evidence digest.
+        value: ${{ jobs.validate.outputs.evidence_digest }}
+      evidence_ref:
+        description: Immutable evidence artifact reference.
+        value: ${{ jobs.validate.outputs.evidence_ref }}
+
+concurrency:
+  group: mindclade-org-nix-validation-${{ github.repository }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  validate:
+    name: Mindclade / Nix Validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      correlation_id: ${{ steps.context.outputs.correlation_id }}
+      source_revision: ${{ inputs.source_revision }}
+      caller_repository: ${{ github.repository }}
+      trust_classification: ${{ steps.context.outputs.source_trust }}
+      execution_tier: ${{ steps.context.outputs.execution_tier }}
+      plan_id: nix-validation-v1
+      build_id: ${{ github.run_id }}
+      conclusion: ${{ steps.result.outputs.conclusion }}
+      reason_code: ${{ steps.result.outputs.reason_code }}
+      evidence_digest: ${{ steps.evidence.outputs.evidence_digest }}
+      evidence_ref: ${{ steps.evidence.outputs.evidence_ref }}
+    steps:
+      - id: context
+        name: Validate caller context
+        continue-on-error: true
+        uses: $/.github/actions/validate-trusted-context
+        with:
+          expected-source-revision: ${{ inputs.source_revision }}
+      - id: pins
+        name: Verify immutable implementation closure
+        continue-on-error: true
+        uses: $/.github/actions/verify-pinned-actions
+      - name: Check out exact caller revision
+        if: steps.context.outcome == 'success' && steps.pins.outcome == 'success'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.source_revision }}
+          persist-credentials: false
+      - name: Stage the checksum-verified Nix installer
+        if: steps.context.outcome == 'success' && steps.pins.outcome == 'success'
+        env:
+          NIX_INSTALLER_SHA256: f964e78c30bb096d1449179d738eeae8f9410df1623d42fe7da972643e0d0e74
+          NIX_INSTALLER_URL: https://github.com/DeterminateSystems/nix-installer/releases/download/v3.12.2/nix-installer-x86_64-linux
+        run: |
+          set -euo pipefail
+          install_root="${RUNNER_TEMP}/nix-installer"
+          installer="${install_root}/nix-installer-x86_64-linux"
+          mkdir -m 0700 "${install_root}"
+          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+            --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
+            --output "${installer}" "${NIX_INSTALLER_URL}"
+          printf '%s  %s\n' "${NIX_INSTALLER_SHA256}" "${installer}" | sha256sum --check --strict
+          chmod 0755 "${installer}"
+      - name: Install the reviewed Nix runtime
+        if: steps.context.outcome == 'success' && steps.pins.outcome == 'success'
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v3.15.1 action, v3.12.2 installer below
+        with:
+          determinate: true
+          local-root: ${{ runner.temp }}/nix-installer
+      - id: check
+        name: Validate the locked repository toolchain
+        if: steps.context.outcome == 'success' && steps.pins.outcome == 'success'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          nix build --no-update-lock-file .#toolchain
+          nix flake check --no-update-lock-file --print-build-logs
+          nix develop --no-update-lock-file .#ci --command just ci
+      - id: result
+        name: Normalize result
+        if: always()
+        env:
+          CHECK_OUTCOME: ${{ steps.check.outcome }}
+          CONTEXT_OUTCOME: ${{ steps.context.outcome }}
+          CONTEXT_REASON: ${{ steps.context.outputs.reason_code }}
+          PINS_OUTCOME: ${{ steps.pins.outcome }}
+          PINS_REASON: ${{ steps.pins.outputs.reason_code }}
+        run: |
+          set -euo pipefail
+          conclusion=success
+          reason=NIX_VALIDATION_PASSED
+          if [[ "${CONTEXT_OUTCOME}" != success ]]; then
+            conclusion=action_required
+            reason="${CONTEXT_REASON:-CONTEXT_INVALID}"
+          elif [[ "${PINS_OUTCOME}" != success ]]; then
+            conclusion=failure
+            reason="${PINS_REASON:-PIN_POLICY_FAILED}"
+          elif [[ "${CHECK_OUTCOME}" != success ]]; then
+            conclusion=failure
+            reason=NIX_VALIDATION_FAILED
+          fi
+          printf 'conclusion=%s\nreason_code=%s\n' "${conclusion}" "${reason}" >> "${GITHUB_OUTPUT}"
+      - id: evidence
+        name: Publish CI evidence
+        if: always() && steps.context.outputs.context_json != ''
+        continue-on-error: true
+        uses: $/.github/actions/publish-ci-evidence
+        with:
+          context-json: ${{ steps.context.outputs.context_json }}
+          producer: github_actions
+          conclusion: ${{ steps.result.outputs.conclusion }}
+          reason-code: ${{ steps.result.outputs.reason_code }}
+          plan-id: nix-validation-v1
+          build-id: ${{ github.run_id }}
+          artifact-name: nix-validation-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Enforce result
+        if: always()
+        env:
+          CONCLUSION: ${{ steps.result.outputs.conclusion }}
+          EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+        run: |
+          set -euo pipefail
+          [[ "${CONCLUSION}" == success ]]
+          [[ "${EVIDENCE_OUTCOME}" == success ]]
