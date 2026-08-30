@@ -14,7 +14,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: mindclade-buildkite-bridge-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+  group: mindclade-buildkite-bridge-${{ github.repository }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:

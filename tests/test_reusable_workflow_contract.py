@@ -75,6 +75,10 @@ class ReusableWorkflowContractTest(unittest.TestCase):
         self.assertIsNone(parse_error)
         self.assertIsInstance(document, dict)
         self.assertEqual([], validator._buildkite_bridge_errors(document, Path(validator.BUILDKITE_BRIDGE_TEMPLATE_PATH)))
+        self.assertEqual(
+            "mindclade-buildkite-bridge-${{ github.repository }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}",
+            document["concurrency"]["group"],
+        )
         required_secrets = document["jobs"]["buildkite_required"]["secrets"]
         self.assertEqual(
             "${{ secrets.MINDCLADE_BUILDKITE_CANCEL_TOKEN }}",
@@ -86,6 +90,8 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             source.replace("  pull_request:\n", "  pull_request_target:\n", 1),
             source.replace("needs.classify.outputs.trust_classification == 'trusted'", "needs.classify.outputs.trust_classification == 'untrusted'", 1),
             source.replace("    uses: mindclade/.github/.github/workflows/reusable-documentation-check.yml@", "    secrets:\n      leaked: ${{ secrets.MINDCLADE_BUILDKITE_PIPELINE }}\n    uses: mindclade/.github/.github/workflows/reusable-documentation-check.yml@", 1),
+            source.replace("-${{ github.workflow }}", "", 1),
+            source.replace("${{ github.event.pull_request.number || github.ref }}", "${{ github.sha }}", 1),
         )
         for mutation in mutations:
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
@@ -206,18 +212,29 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             self.assertFalse(outcome["ok"])
             self.assertTrue(any("bounded concurrency" in error for error in outcome["errors"]))
 
-        revision_lane = {
-            "jobs": {"test": {"runs-on": "ubuntu-24.04"}},
-            "concurrency": {
-                "group": "reusable-${{ github.repository }}-${{ inputs.source_revision }}",
-                "cancel-in-progress": True,
-            },
-        }
-        errors = validator._bounded_concurrency_errors(
-            revision_lane,
-            Path(".github/workflows/reusable-documentation-check.yml"),
+        reusable_path = Path(".github/workflows/reusable-documentation-check.yml")
+        reusable_groups = (
+            (
+                "reusable-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}",
+                "must include the caller github.workflow",
+            ),
+            (
+                "reusable-${{ github.repository }}-${{ github.workflow }}",
+                "must include its stable pull-request/ref boundary",
+            ),
+            (
+                "reusable-${{ github.repository }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.source_revision }}",
+                "must not create a lane per source revision",
+            ),
         )
-        self.assertTrue(any("must not create a lane per source revision" in error for error in errors))
+        for group, expected_error in reusable_groups:
+            with self.subTest(group=group):
+                document = {
+                    "jobs": {"test": {"runs-on": "ubuntu-24.04"}},
+                    "concurrency": {"group": group, "cancel-in-progress": True},
+                }
+                errors = validator._bounded_concurrency_errors(document, reusable_path)
+                self.assertTrue(any(expected_error in error for error in errors), errors)
 
     def test_buildkite_secret_classification_uses_the_repository_path_not_display_name(self) -> None:
         secret = "    secrets:\n      buildkite_evidence_token:\n        required: true\n"

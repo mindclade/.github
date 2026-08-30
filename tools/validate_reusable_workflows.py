@@ -49,7 +49,7 @@ DOCUMENTATION_REQUIRED_HEADINGS = {
     "SUPPORT.md": frozenset({"Source support", "Security support", "Connected requests"}),
     "profile/README.md": frozenset({"Activation boundary"}),
 }
-APPROVED_SCORECARD_WORKFLOW_SHA256 = "298a89950a4cac5a890eb5b70242ae8c59dbed14bc276621cffb12e6b0156f04"
+APPROVED_SCORECARD_WORKFLOW_SHA256 = "bb633c52d5b541d4d4461f61598f81a63265157727cf91a8c27f797e53efe3b4"
 COMMON_WORKFLOW_OUTPUTS = (
     "correlation_id",
     "source_revision",
@@ -1109,9 +1109,10 @@ def _bounded_concurrency_errors(document: dict[str, Any], relative: Path) -> lis
     # Incomplete unit-test documents without jobs are validated by their
     # focused interface checks. Every executable repository workflow has jobs
     # and must carry a stable repository-scoped cancellation boundary. Reusable
-    # groups deliberately omit the source revision: a revision-scoped group
-    # would create one independent lane per push and would not bound superseded
-    # work. The repository self-test uses the stable pull-request/ref identity.
+    # workflows inherit the caller's github context, so their groups bind both
+    # the caller workflow and its stable pull-request/ref boundary. They
+    # deliberately omit the source revision: a revision-scoped group would
+    # create one independent lane per push and would not bound superseded work.
     if not isinstance(document.get("jobs"), dict):
         return []
     concurrency = document.get("concurrency")
@@ -1122,6 +1123,10 @@ def _bounded_concurrency_errors(document: dict[str, Any], relative: Path) -> lis
     if not isinstance(group, str) or "${{ github.repository }}" not in group:
         errors.append(f"{relative}: concurrency group must include github.repository")
     if relative.name.startswith("reusable-"):
+        if not isinstance(group, str) or "${{ github.workflow }}" not in group:
+            errors.append(f"{relative}: reusable concurrency group must include the caller github.workflow")
+        if not isinstance(group, str) or "${{ github.event.pull_request.number || github.ref }}" not in group:
+            errors.append(f"{relative}: reusable concurrency group must include its stable pull-request/ref boundary")
         if isinstance(group, str) and "${{ inputs.source_revision }}" in group:
             errors.append(f"{relative}: reusable concurrency group must not create a lane per source revision")
     elif not isinstance(group, str) or "${{ github.event.pull_request.number || github.ref }}" not in group:
@@ -1155,8 +1160,13 @@ def _buildkite_bridge_errors(document: dict[str, Any], relative: Path) -> list[s
         errors.append(f"{prefix} must bound repository/ref concurrency")
     else:
         group = concurrency.get("group")
-        if not isinstance(group, str) or "${{ github.repository }}" not in group or "${{ github.event.pull_request.number || github.ref }}" not in group:
-            errors.append(f"{prefix} concurrency must bind repository and stable pull-request/ref identity")
+        required_dimensions = (
+            "${{ github.repository }}",
+            "${{ github.workflow }}",
+            "${{ github.event.pull_request.number || github.ref }}",
+        )
+        if not isinstance(group, str) or any(dimension not in group for dimension in required_dimensions):
+            errors.append(f"{prefix} concurrency must bind repository, workflow, and stable pull-request/ref identity")
         if concurrency.get("cancel-in-progress") is not True:
             errors.append(f"{prefix} must cancel superseded runs")
 

@@ -57,7 +57,7 @@ on:
         value: ${{ jobs.metadata.outputs.evidence_ref }}
 
 concurrency:
-  group: mindclade-org-metadata-${{ github.repository }}
+  group: mindclade-org-metadata-${{ github.repository }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions: {}

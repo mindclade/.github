@@ -110,7 +110,7 @@ on:
         value: ${{ jobs.archive.outputs.archive_artifact_digest }}
 
 concurrency:
-  group: mindclade-org-required-check-${{ github.repository }}
+  group: mindclade-org-required-check-${{ github.repository }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions: {}

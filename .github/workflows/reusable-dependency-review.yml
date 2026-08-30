@@ -47,7 +47,7 @@ on:
         value: ${{ jobs.dependency_review.outputs.evidence_ref }}
 
 concurrency:
-  group: mindclade-org-dependency-review-${{ github.repository }}
+  group: mindclade-org-dependency-review-${{ github.repository }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions: {}

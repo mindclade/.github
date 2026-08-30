@@ -43,7 +43,7 @@ on:
         value: ${{ jobs.finalize.outputs.evidence_ref }}
 
 concurrency:
-  group: mindclade-org-scorecard-${{ github.repository }}
+  group: mindclade-org-scorecard-${{ github.repository }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions: {}

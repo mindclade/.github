@@ -68,7 +68,7 @@ on:
         value: ${{ jobs.dispatch.outputs.pipeline_definition_revision }}
 
 concurrency:
-  group: mindclade-org-buildkite-dispatch-${{ github.repository }}
+  group: mindclade-org-buildkite-dispatch-${{ github.repository }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions: {}
