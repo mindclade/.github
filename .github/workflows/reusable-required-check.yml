@@ -227,6 +227,7 @@ jobs:
           BUILDKITE_API_TOKEN: ${{ secrets.buildkite_cancel_token }}
           BUILDKITE_ORGANIZATION: ${{ github.repository_owner }}
           BUILDKITE_PIPELINE: ${{ secrets.buildkite_pipeline }}
+          EXPECTED_PIPELINE_DEFINITION_REVISION: ${{ inputs.pipeline_definition_revision }}
           EXPECTED_SOURCE_REVISION: ${{ inputs.source_revision }}
           IMPLEMENTATION_ROOT: ${{ steps.context.outputs.implementation_root }}
         run: |
