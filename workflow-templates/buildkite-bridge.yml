@@ -1,0 +1,34 @@
+name: Mindclade Buildkite bridge
+
+on:
+  pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    uses: mindclade/.github/.github/workflows/reusable-buildkite-dispatch.yml@3e4924eee71766b696807e0eab9f98d25d82e78d
+    with:
+      source_revision: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+      pipeline_definition_revision: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
+      pipeline_class: presubmit
+    secrets:
+      buildkite_dispatch_token: ${{ secrets.MINDCLADE_BUILDKITE_DISPATCH_TOKEN }}
+      buildkite_pipeline: ${{ secrets.MINDCLADE_BUILDKITE_PIPELINE }}
+
+  required:
+    needs: dispatch
+    if: always()
+    uses: mindclade/.github/.github/workflows/reusable-required-check.yml@3e4924eee71766b696807e0eab9f98d25d82e78d
+    with:
+      source_revision: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+      pipeline_definition_revision: ${{ needs.dispatch.outputs.pipeline_definition_revision }}
+      build_id: ${{ needs.dispatch.outputs.build_id }}
+      build_number: ${{ needs.dispatch.outputs.build_number }}
+      correlation_id: ${{ needs.dispatch.outputs.correlation_id }}
+      context_digest: ${{ needs.dispatch.outputs.context_digest }}
+    secrets:
+      buildkite_evidence_token: ${{ secrets.MINDCLADE_BUILDKITE_EVIDENCE_TOKEN }}
+      buildkite_pipeline: ${{ secrets.MINDCLADE_BUILDKITE_PIPELINE }}

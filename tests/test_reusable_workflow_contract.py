@@ -38,7 +38,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
     def test_repository_matches_the_approved_inventory(self) -> None:
         outcome = validator.validate_inventory(ROOT)
         self.assertTrue(outcome["ok"], outcome["errors"])
-        self.assertEqual(52, outcome["expected"])
+        self.assertEqual(56, outcome["expected"])
         self.assertIn(".github/workflows/self-test.yml", validator.EXPECTED_INVENTORY)
         self.assertIn("policy/tests/reusable_workflow_interface_test.rego", validator.EXPECTED_INVENTORY)
 

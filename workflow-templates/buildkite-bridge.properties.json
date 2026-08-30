@@ -1,0 +1,4 @@
+{
+  "name": "Mindclade Buildkite bridge",
+  "description": "Dispatch and verify the isolated Mindclade presubmit pipeline."
+}
