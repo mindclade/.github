@@ -1,0 +1,193 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
+
+package(default_visibility = ["//visibility:private"])
+
+config_setting(
+    name = "darwin_amd64",
+    constraint_values = ["@platforms//os:osx", "@platforms//cpu:x86_64"],
+)
+
+config_setting(
+    name = "darwin_arm64",
+    constraint_values = ["@platforms//os:osx", "@platforms//cpu:arm64"],
+)
+
+config_setting(
+    name = "linux_amd64",
+    constraint_values = ["@platforms//os:linux", "@platforms//cpu:x86_64"],
+)
+
+config_setting(
+    name = "linux_arm64",
+    constraint_values = ["@platforms//os:linux", "@platforms//cpu:arm64"],
+)
+
+filegroup(
+    name = "workflow_sources",
+    srcs = glob([".github/workflows/*.yaml", ".github/workflows/*.yml"], allow_empty = True),
+)
+
+filegroup(
+    name = "local_action_sources",
+    srcs = glob([".github/actions/**"]),
+)
+
+filegroup(
+    name = "workflow_template_sources",
+    srcs = glob(["workflow-templates/*"], allow_empty = True),
+)
+
+filegroup(
+    name = "policy_sources",
+    srcs = glob(["policy/*.rego", "policy/tests/*.rego"]),
+)
+
+filegroup(
+    name = "schema_sources",
+    srcs = [
+        "schemas/ci_evidence.schema.json",
+        "schemas/trusted_context.schema.json",
+    ],
+)
+
+filegroup(
+    name = "test_fixtures",
+    srcs = glob(["tests/fixtures/*.json"]),
+)
+
+genrule(
+    name = "opa_tool",
+    srcs = select({
+        ":darwin_amd64": ["@opa_darwin_amd64//file"],
+        ":darwin_arm64": ["@opa_darwin_arm64//file"],
+        ":linux_amd64": ["@opa_linux_amd64//file"],
+        ":linux_arm64": ["@opa_linux_arm64//file"],
+    }),
+    outs = ["opa"],
+    cmd = "cp $< $@ && chmod +x $@",
+    executable = True,
+)
+
+genrule(
+    name = "actionlint_tool",
+    srcs = select({
+        ":darwin_amd64": ["@actionlint_darwin_amd64//:actionlint"],
+        ":darwin_arm64": ["@actionlint_darwin_arm64//:actionlint"],
+        ":linux_amd64": ["@actionlint_linux_amd64//:actionlint"],
+        ":linux_arm64": ["@actionlint_linux_arm64//:actionlint"],
+    }),
+    outs = ["actionlint"],
+    cmd = "cp $< $@ && chmod +x $@",
+    executable = True,
+)
+
+genrule(
+    name = "policy_check",
+    srcs = glob(["policy/*.rego", "policy/tests/*.rego"]),
+    tools = [":opa_tool"],
+    outs = ["policy_check.stamp"],
+    cmd = "$(location :opa_tool) test --format=json policy > /dev/null && touch $@",
+)
+
+genrule(
+    name = "workflow_lint",
+    srcs = glob(
+        [
+            ".github/workflows/*.yaml",
+            ".github/workflows/*.yml",
+            "workflow-templates/*.yaml",
+            "workflow-templates/*.yml",
+        ],
+        allow_empty = True,
+    ),
+    tools = [":actionlint_tool"],
+    outs = ["workflow_lint.stamp"],
+    # actionlint does not recognise the repository's explicit immutable
+    # implementation-action prefix. Rewrite only the strict, validator-accepted
+    # form in a declared temporary output directory; malformed $/ references
+    # remain untouched and continue to be linted as errors.
+    cmd = "set -eu; input_dir=$(@D)/actionlint-inputs; mkdir -p $$input_dir; index=0; for source in $(SRCS); do index=$$((index + 1)); awk '/^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*\\$$\\/\\.github\\/actions\\/[A-Za-z0-9._\\/-]+[[:space:]]*(#.*)?$$/ { sub(/\\$$\\/\\.github\\/actions\\//, \"./.github/actions/\") } { print }' $$source > $$input_dir/$$index.yml; done; $(location :actionlint_tool) $$input_dir/*.yml > /dev/null && touch $@",
+)
+
+py_binary(
+    name = "validate_reusable_workflows",
+    srcs = ["tools/validate_reusable_workflows.py"],
+    main = "tools/validate_reusable_workflows.py",
+    data = [
+        ":local_action_sources",
+        ":schema_sources",
+        ":workflow_sources",
+        ":workflow_template_sources",
+    ],
+    legacy_create_init = 0,
+)
+
+py_binary(
+    name = "emit_ci_evidence",
+    srcs = ["tools/emit_ci_evidence.py"],
+    main = "tools/emit_ci_evidence.py",
+    data = [":schema_sources"],
+    legacy_create_init = 0,
+)
+
+py_test(
+    name = "reusable_workflow_contract_test",
+    srcs = [
+        "tests/test_reusable_workflow_contract.py",
+        "tools/validate_reusable_workflows.py",
+    ],
+    main = "tests/test_reusable_workflow_contract.py",
+    imports = ["tools"],
+    data = [
+        ":policy_check",
+        ":schema_sources",
+        ":test_fixtures",
+        ":workflow_lint",
+    ],
+    legacy_create_init = 0,
+)
+
+py_test(
+    name = "declared_permissions_test",
+    srcs = [
+        "tests/test_declared_permissions.py",
+        "tools/emit_ci_evidence.py",
+        "tools/validate_reusable_workflows.py",
+    ],
+    main = "tests/test_declared_permissions.py",
+    imports = ["tools"],
+    data = [
+        ":policy_check",
+        ":schema_sources",
+        ":test_fixtures",
+        ":workflow_lint",
+    ],
+    legacy_create_init = 0,
+)
+
+py_test(
+    name = "action_digest_pinning_test",
+    srcs = [
+        "tests/test_action_digest_pinning.py",
+        "tools/emit_ci_evidence.py",
+        "tools/validate_reusable_workflows.py",
+    ],
+    main = "tests/test_action_digest_pinning.py",
+    imports = ["tools"],
+    data = [
+        ":policy_check",
+        ":schema_sources",
+        ":test_fixtures",
+        ":workflow_lint",
+    ],
+    legacy_create_init = 0,
+)
+
+test_suite(
+    name = "self_test",
+    tests = [
+        ":action_digest_pinning_test",
+        ":declared_permissions_test",
+        ":reusable_workflow_contract_test",
+    ],
+)

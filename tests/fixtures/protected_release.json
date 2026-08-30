@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0.0",
+  "correlation_id": "rel-00001000",
+  "repository": "Mindclade/mindclade",
+  "actor": "release-bot",
+  "event_name": "release",
+  "ref": "refs/tags/v1.0.0",
+  "source_revision": "7777777777777777777777777777777777777777",
+  "base_revision": null,
+  "workflow_ref": ".github/workflows/release-evidence.yml",
+  "workflow_revision": "8888888888888888888888888888888888888888",
+  "fork": false,
+  "ref_protected": true,
+  "source_trust": "protected",
+  "execution_tier": "release"
+}

@@ -1,0 +1,27 @@
+name: Architecture change
+description: Propose a change to this repository's source, workflow, policy, or ownership boundary.
+title: "architecture: "
+labels: [architecture]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and decision
+      description: State the problem, proposed decision, and affected declared paths.
+    validations:
+      required: true
+  - type: textarea
+    id: ownership
+    attributes:
+      label: Ownership and review
+      description: Identify the platform owner and required security review impact.
+      value: "Owner: @mindclade/developer-platform\nSecurity review: @mindclade/security"
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: Validation and rollback
+      description: Describe validation evidence, migration/rollback, and the source-ready or connected activation impact.
+    validations:
+      required: true

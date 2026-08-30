@@ -1,0 +1,33 @@
+apiVersion: mindclade.io/v1alpha1
+kind: Component
+metadata:
+  name: dot-github
+  description: Organization-wide reusable workflows and community health policy.
+  annotations:
+    github.com/project-slug: mindclade/.github
+    mindclade.dev/security-owner: security
+spec:
+  type: governance-source
+  lifecycle: pre-production
+  maturity: pre-production
+  owner: developer-platform
+  security_reviewers:
+    - security
+  repository_class: governance-source
+  data_classification: internal
+  production_authority: false
+  dependencies: []
+  provides:
+    - reusable-workflow-contract-v1
+    - trusted-context-v1
+    - ci-evidence-v1
+  release:
+    strategy: reviewed-main
+    artifact: source-commit
+    immutable: true
+  activation:
+    source_ready:
+      description: Source, metadata, validation, and required reviews are complete; no external organization mutation is implied.
+    connected:
+      description: An approved external organization connection has been independently verified; source readiness alone does not grant this state.
+  license: Mindclade Proprietary License

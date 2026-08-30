@@ -1,0 +1,374 @@
+name: Reusable CodeQL analysis
+
+on:
+  workflow_call:
+    inputs:
+      source_revision:
+        description: Exact caller source commit SHA.
+        required: true
+        type: string
+      languages:
+        description: JSON array of CodeQL language identifiers.
+        required: false
+        default: '["python"]'
+        type: string
+      build_mode:
+        description: CodeQL build mode, none or autobuild.
+        required: false
+        default: none
+        type: string
+    outputs:
+      correlation_id:
+        description: Stable correlation identifier.
+        value: ${{ jobs.finalize.outputs.correlation_id }}
+      source_revision:
+        description: Validated source revision.
+        value: ${{ jobs.finalize.outputs.source_revision }}
+      caller_repository:
+        description: Validated caller repository.
+        value: ${{ jobs.finalize.outputs.caller_repository }}
+      trust_classification:
+        description: Observed source trust classification.
+        value: ${{ jobs.finalize.outputs.trust_classification }}
+      execution_tier:
+        description: Observed execution tier.
+        value: ${{ jobs.finalize.outputs.execution_tier }}
+      plan_id:
+        description: CodeQL plan identifier.
+        value: ${{ jobs.finalize.outputs.plan_id }}
+      build_id:
+        description: Provider build identifier.
+        value: ${{ jobs.finalize.outputs.build_id }}
+      conclusion:
+        description: Normalized conclusion.
+        value: ${{ jobs.finalize.outputs.conclusion }}
+      reason_code:
+        description: Stable conclusion reason.
+        value: ${{ jobs.finalize.outputs.reason_code }}
+      evidence_digest:
+        description: Canonical evidence digest.
+        value: ${{ jobs.finalize.outputs.evidence_digest }}
+      evidence_ref:
+        description: Immutable evidence artifact reference.
+        value: ${{ jobs.finalize.outputs.evidence_ref }}
+
+permissions: {}
+
+jobs:
+  prepare:
+    name: Mindclade / CodeQL Context
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      base_revision: ${{ steps.context.outputs.base_revision }}
+      context_json: ${{ steps.context.outputs.context_json }}
+      correlation_id: ${{ steps.context.outputs.correlation_id }}
+      execution_tier: ${{ steps.context.outputs.execution_tier }}
+      implementation_root: ${{ steps.context.outputs.implementation_root }}
+      source_trust: ${{ steps.context.outputs.source_trust }}
+    steps:
+      - id: context
+        name: Validate caller context
+        uses: $/.github/actions/validate-trusted-context
+        with:
+          expected-source-revision: ${{ inputs.source_revision }}
+      - name: Verify immutable implementation closure
+        uses: $/.github/actions/verify-pinned-actions
+      - name: Validate CodeQL configuration
+        env:
+          BUILD_MODE: ${{ inputs.build_mode }}
+          LANGUAGES_JSON: ${{ inputs.languages }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+
+          allowed = {
+              "c-cpp", "csharp", "go", "java-kotlin",
+              "javascript-typescript", "python", "ruby", "rust", "swift",
+          }
+          languages = json.loads(os.environ["LANGUAGES_JSON"])
+          if not isinstance(languages, list) or len(languages) != 1:
+              raise SystemExit("languages must be a JSON array containing exactly one language")
+          if any(not isinstance(item, str) or item not in allowed for item in languages):
+              raise SystemExit("languages contains an unsupported CodeQL language")
+          build_mode = os.environ["BUILD_MODE"]
+          if build_mode not in {"none", "autobuild"}:
+              raise SystemExit("build_mode must be none or autobuild")
+          language = languages[0]
+          if build_mode == "autobuild" and language in {"javascript-typescript", "python", "ruby"}:
+              raise SystemExit("interpreted CodeQL languages require build_mode none")
+          if build_mode == "none" and language in {"go", "java-kotlin", "swift"}:
+              raise SystemExit("go, java-kotlin, and swift require build_mode autobuild")
+          PY
+
+  untrusted:
+    name: Mindclade / CodeQL (untrusted)
+    needs: prepare
+    if: needs.prepare.outputs.execution_tier == 'untrusted'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      conclusion: ${{ steps.result.outputs.conclusion }}
+      evidence_digest: ${{ steps.evidence.outputs.evidence_digest }}
+      evidence_ref: ${{ steps.evidence.outputs.evidence_ref }}
+      reason_code: ${{ steps.result.outputs.reason_code }}
+    steps:
+      - id: checkout
+        name: Check out exact caller revision
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_revision }}
+          persist-credentials: false
+      - id: init
+        name: Initialize CodeQL without upload credentials
+        if: steps.checkout.outcome == 'success'
+        continue-on-error: true
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.35.1
+        with:
+          languages: ${{ join(fromJSON(inputs.languages), ',') }}
+          build-mode: ${{ inputs.build_mode }}
+      - id: analyze
+        name: Analyze without uploading security events
+        if: steps.init.outcome == 'success'
+        continue-on-error: true
+        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.35.1
+        with:
+          output: ${{ runner.temp }}/codeql-untrusted-results
+          upload: never
+      - id: reports
+        name: Collect CodeQL SARIF reports
+        if: always()
+        continue-on-error: true
+        env:
+          ANALYZE_OUTCOME: ${{ steps.analyze.outcome }}
+        run: |
+          set -euo pipefail
+          mapfile -t reports < <(find "${RUNNER_TEMP}/codeql-untrusted-results" -type f -name '*.sarif' -print 2>/dev/null | sort)
+          {
+            echo 'paths<<MINDCLADE_EOF'
+            printf '%s\n' "${reports[@]}"
+            echo MINDCLADE_EOF
+          } >> "${GITHUB_OUTPUT}"
+          if [[ "${ANALYZE_OUTCOME}" == success ]]; then
+            (( ${#reports[@]} > 0 ))
+          fi
+      - id: result
+        name: Normalize result
+        if: always()
+        env:
+          ANALYZE_OUTCOME: ${{ steps.analyze.outcome }}
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          INIT_OUTCOME: ${{ steps.init.outcome }}
+          REPORTS_OUTCOME: ${{ steps.reports.outcome }}
+        run: |
+          set -euo pipefail
+          conclusion=success
+          reason=CODEQL_ANALYSIS_PASSED
+          if [[ "${CHECKOUT_OUTCOME}" != success ]]; then
+            conclusion=failure
+            reason=SOURCE_CHECKOUT_FAILED
+          elif [[ "${INIT_OUTCOME}" != success ]]; then
+            conclusion=failure
+            reason=CODEQL_INITIALIZATION_FAILED
+          elif [[ "${ANALYZE_OUTCOME}" != success ]]; then
+            conclusion=failure
+            reason=CODEQL_ANALYSIS_FAILED
+          elif [[ "${REPORTS_OUTCOME}" != success ]]; then
+            conclusion=failure
+            reason=CODEQL_REPORT_MISSING
+          fi
+          printf 'conclusion=%s\nreason_code=%s\n' "${conclusion}" "${reason}" >> "${GITHUB_OUTPUT}"
+      - id: evidence
+        name: Publish CI evidence
+        if: always()
+        continue-on-error: true
+        uses: $/.github/actions/publish-ci-evidence
+        with:
+          context-json: ${{ needs.prepare.outputs.context_json }}
+          producer: github_actions
+          conclusion: ${{ steps.result.outputs.conclusion }}
+          reason-code: ${{ steps.result.outputs.reason_code }}
+          plan-id: codeql-untrusted-v1
+          build-id: ${{ github.run_id }}
+          report-paths: ${{ steps.reports.outputs.paths }}
+          artifact-name: codeql-untrusted-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Enforce result
+        if: always()
+        env:
+          CONCLUSION: ${{ steps.result.outputs.conclusion }}
+          EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+        run: |
+          set -euo pipefail
+          [[ "${CONCLUSION}" == success ]]
+          [[ "${EVIDENCE_OUTCOME}" == success ]]
+
+  protected:
+    name: Mindclade / CodeQL (protected)
+    needs: prepare
+    if: needs.prepare.outputs.execution_tier == 'trusted' || needs.prepare.outputs.execution_tier == 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      security-events: write
+    outputs:
+      conclusion: ${{ steps.result.outputs.conclusion }}
+      evidence_digest: ${{ steps.evidence.outputs.evidence_digest }}
+      evidence_ref: ${{ steps.evidence.outputs.evidence_ref }}
+      reason_code: ${{ steps.result.outputs.reason_code }}
+    steps:
+      - id: checkout
+        name: Check out exact caller revision
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_revision }}
+          persist-credentials: false
+      - id: init
+        name: Initialize CodeQL
+        if: steps.checkout.outcome == 'success'
+        continue-on-error: true
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.35.1
+        with:
+          languages: ${{ join(fromJSON(inputs.languages), ',') }}
+          build-mode: ${{ inputs.build_mode }}
+      - id: analyze
+        name: Analyze and upload security events
+        if: steps.init.outcome == 'success'
+        continue-on-error: true
+        uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.35.1
+        with:
+          output: ${{ runner.temp }}/codeql-protected-results
+          upload: always
+      - id: reports
+        name: Collect CodeQL SARIF reports
+        if: always()
+        continue-on-error: true
+        env:
+          ANALYZE_OUTCOME: ${{ steps.analyze.outcome }}
+        run: |
+          set -euo pipefail
+          mapfile -t reports < <(find "${RUNNER_TEMP}/codeql-protected-results" -type f -name '*.sarif' -print 2>/dev/null | sort)
+          {
+            echo 'paths<<MINDCLADE_EOF'
+            printf '%s\n' "${reports[@]}"
+            echo MINDCLADE_EOF
+          } >> "${GITHUB_OUTPUT}"
+          if [[ "${ANALYZE_OUTCOME}" == success ]]; then
+            (( ${#reports[@]} > 0 ))
+          fi
+      - id: result
+        name: Normalize result
+        if: always()
+        env:
+          ANALYZE_OUTCOME: ${{ steps.analyze.outcome }}
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          INIT_OUTCOME: ${{ steps.init.outcome }}
+          REPORTS_OUTCOME: ${{ steps.reports.outcome }}
+        run: |
+          set -euo pipefail
+          conclusion=success
+          reason=CODEQL_ANALYSIS_PASSED
+          if [[ "${CHECKOUT_OUTCOME}" != success ]]; then
+            conclusion=failure
+            reason=SOURCE_CHECKOUT_FAILED
+          elif [[ "${INIT_OUTCOME}" != success ]]; then
+            conclusion=failure
+            reason=CODEQL_INITIALIZATION_FAILED
+          elif [[ "${ANALYZE_OUTCOME}" != success ]]; then
+            conclusion=failure
+            reason=CODEQL_ANALYSIS_FAILED
+          elif [[ "${REPORTS_OUTCOME}" != success ]]; then
+            conclusion=failure
+            reason=CODEQL_REPORT_MISSING
+          fi
+          printf 'conclusion=%s\nreason_code=%s\n' "${conclusion}" "${reason}" >> "${GITHUB_OUTPUT}"
+      - id: evidence
+        name: Publish CI evidence
+        if: always()
+        continue-on-error: true
+        uses: $/.github/actions/publish-ci-evidence
+        with:
+          context-json: ${{ needs.prepare.outputs.context_json }}
+          producer: github_actions
+          conclusion: ${{ steps.result.outputs.conclusion }}
+          reason-code: ${{ steps.result.outputs.reason_code }}
+          plan-id: codeql-protected-v1
+          build-id: ${{ github.run_id }}
+          report-paths: ${{ steps.reports.outputs.paths }}
+          artifact-name: codeql-protected-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Enforce result
+        if: always()
+        env:
+          CONCLUSION: ${{ steps.result.outputs.conclusion }}
+          EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+        run: |
+          set -euo pipefail
+          [[ "${CONCLUSION}" == success ]]
+          [[ "${EVIDENCE_OUTCOME}" == success ]]
+
+  finalize:
+    name: Mindclade / CodeQL Result
+    needs: [prepare, untrusted, protected]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      correlation_id: ${{ needs.prepare.outputs.correlation_id }}
+      source_revision: ${{ inputs.source_revision }}
+      caller_repository: ${{ github.repository }}
+      trust_classification: ${{ needs.prepare.outputs.source_trust }}
+      execution_tier: ${{ needs.prepare.outputs.execution_tier }}
+      plan_id: ${{ steps.collect.outputs.plan_id }}
+      build_id: ${{ github.run_id }}
+      conclusion: ${{ steps.collect.outputs.conclusion }}
+      reason_code: ${{ steps.collect.outputs.reason_code }}
+      evidence_digest: ${{ steps.collect.outputs.evidence_digest }}
+      evidence_ref: ${{ steps.collect.outputs.evidence_ref }}
+    steps:
+      - id: collect
+        name: Select tier result
+        env:
+          EXECUTION_TIER: ${{ needs.prepare.outputs.execution_tier }}
+          PREPARE_RESULT: ${{ needs.prepare.result }}
+          PROTECTED_CONCLUSION: ${{ needs.protected.outputs.conclusion }}
+          PROTECTED_DIGEST: ${{ needs.protected.outputs.evidence_digest }}
+          PROTECTED_REASON: ${{ needs.protected.outputs.reason_code }}
+          PROTECTED_REF: ${{ needs.protected.outputs.evidence_ref }}
+          UNTRUSTED_CONCLUSION: ${{ needs.untrusted.outputs.conclusion }}
+          UNTRUSTED_DIGEST: ${{ needs.untrusted.outputs.evidence_digest }}
+          UNTRUSTED_REASON: ${{ needs.untrusted.outputs.reason_code }}
+          UNTRUSTED_REF: ${{ needs.untrusted.outputs.evidence_ref }}
+        run: |
+          set -euo pipefail
+          if [[ "${PREPARE_RESULT}" != success ]]; then
+            printf '%s\n' \
+              'plan_id=codeql-context-v1' \
+              'conclusion=action_required' \
+              'reason_code=CONTEXT_OR_CONFIGURATION_INVALID' \
+              'evidence_digest=' \
+              'evidence_ref=' >> "${GITHUB_OUTPUT}"
+          elif [[ "${EXECUTION_TIER}" == untrusted ]]; then
+            printf 'plan_id=codeql-untrusted-v1\nconclusion=%s\nreason_code=%s\nevidence_digest=%s\nevidence_ref=%s\n' \
+              "${UNTRUSTED_CONCLUSION}" "${UNTRUSTED_REASON}" "${UNTRUSTED_DIGEST}" "${UNTRUSTED_REF}" >> "${GITHUB_OUTPUT}"
+          else
+            printf 'plan_id=codeql-protected-v1\nconclusion=%s\nreason_code=%s\nevidence_digest=%s\nevidence_ref=%s\n' \
+              "${PROTECTED_CONCLUSION}" "${PROTECTED_REASON}" "${PROTECTED_DIGEST}" "${PROTECTED_REF}" >> "${GITHUB_OUTPUT}"
+          fi
+      - name: Enforce selected result
+        env:
+          CONCLUSION: ${{ steps.collect.outputs.conclusion }}
+          EVIDENCE_DIGEST: ${{ steps.collect.outputs.evidence_digest }}
+        run: |
+          set -euo pipefail
+          [[ "${CONCLUSION}" == success ]]
+          [[ "${EVIDENCE_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]

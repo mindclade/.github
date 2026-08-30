@@ -1,0 +1,33 @@
+name: Scientific correctness concern
+description: Report a concern about scientific terminology, evidence labeling, or correctness claims in this repository.
+title: "science: "
+labels: [scientific-correctness]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This repository is pre-production governance source. Do not include restricted research data or security-sensitive details.
+  - type: textarea
+    id: concern
+    attributes:
+      label: Concern
+      description: Identify the statement, source path, and why it may be incorrect or misleading.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Supporting evidence
+      description: Provide public or appropriately shareable references and the proposed correction.
+    validations:
+      required: true
+  - type: dropdown
+    id: claim_state
+    attributes:
+      label: Claim state
+      options:
+        - source-ready
+        - connected
+        - not an operational claim
+    validations:
+      required: true

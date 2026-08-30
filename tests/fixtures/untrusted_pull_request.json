@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0.0",
+  "correlation_id": "pr-00000043",
+  "repository": "Mindclade/mindclade",
+  "actor": "external-contributor",
+  "event_name": "pull_request",
+  "ref": "refs/heads/contributor/fix",
+  "source_revision": "4444444444444444444444444444444444444444",
+  "base_revision": "5555555555555555555555555555555555555555",
+  "workflow_ref": ".github/workflows/pr-metadata.yml",
+  "workflow_revision": "6666666666666666666666666666666666666666",
+  "fork": true,
+  "ref_protected": false,
+  "source_trust": "untrusted",
+  "execution_tier": "untrusted"
+}

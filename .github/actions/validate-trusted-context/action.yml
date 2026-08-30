@@ -1,0 +1,62 @@
+name: Validate trusted context
+description: Derive and validate the caller trust context from GitHub-observed data.
+
+inputs:
+  expected-source-revision:
+    description: Expected lowercase 40-character source commit SHA.
+    required: true
+  allowed-execution-tiers:
+    description: Comma-separated execution tiers accepted by the calling workflow.
+    required: false
+    default: untrusted,trusted,release
+
+outputs:
+  verdict:
+    description: PASS or FAIL.
+    value: ${{ steps.validate.outputs.verdict }}
+  reason_code:
+    description: Stable machine-readable validation reason.
+    value: ${{ steps.validate.outputs.reason_code }}
+  context_json:
+    description: Canonical trusted-context JSON.
+    value: ${{ steps.validate.outputs.context_json }}
+  context_digest:
+    description: SHA-256 digest of canonical trusted-context JSON.
+    value: ${{ steps.validate.outputs.context_digest }}
+  correlation_id:
+    description: Stable correlation identifier for this source and workflow run.
+    value: ${{ steps.validate.outputs.correlation_id }}
+  source_revision:
+    description: Observed source commit SHA.
+    value: ${{ steps.validate.outputs.source_revision }}
+  base_revision:
+    description: Observed base or protected pipeline-definition SHA.
+    value: ${{ steps.validate.outputs.base_revision }}
+  source_trust:
+    description: untrusted, trusted, or protected source classification.
+    value: ${{ steps.validate.outputs.source_trust }}
+  execution_tier:
+    description: untrusted, trusted, or release.
+    value: ${{ steps.validate.outputs.execution_tier }}
+  implementation_root:
+    description: Absolute root of the immutable workflow implementation checkout.
+    value: ${{ steps.validate.outputs.implementation_root }}
+
+runs:
+  using: composite
+  steps:
+    - id: validate
+      name: Derive context from the event
+      shell: bash
+      env:
+        ALLOWED_EXECUTION_TIERS: ${{ inputs.allowed-execution-tiers }}
+        EXPECTED_SOURCE_REVISION: ${{ inputs.expected-source-revision }}
+        IMPLEMENTATION_ROOT: ${{ github.action_path }}/../../..
+      run: |
+        set -euo pipefail
+        python3 "${IMPLEMENTATION_ROOT}/tools/validate_reusable_workflows.py" context \
+          --event-path "${GITHUB_EVENT_PATH}" \
+          --expected-source-revision "${EXPECTED_SOURCE_REVISION}" \
+          --allowed-execution-tiers "${ALLOWED_EXECUTION_TIERS}" \
+          --implementation-root "${IMPLEMENTATION_ROOT}" \
+          --github-output "${GITHUB_OUTPUT}"

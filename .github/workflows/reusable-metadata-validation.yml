@@ -1,0 +1,156 @@
+name: Reusable repository metadata validation
+
+on:
+  workflow_call:
+    inputs:
+      source_revision:
+        description: Exact caller source commit SHA.
+        required: true
+        type: string
+      component_path:
+        description: Repository-relative component metadata path.
+        required: false
+        default: component.yaml
+        type: string
+      required_files:
+        description: Newline-separated repository-relative files that must exist.
+        required: false
+        default: |-
+          README.md
+          SECURITY.md
+          LICENSE
+          component.yaml
+        type: string
+    outputs:
+      correlation_id:
+        description: Stable correlation identifier.
+        value: ${{ jobs.metadata.outputs.correlation_id }}
+      source_revision:
+        description: Validated source revision.
+        value: ${{ jobs.metadata.outputs.source_revision }}
+      caller_repository:
+        description: Validated caller repository.
+        value: ${{ jobs.metadata.outputs.caller_repository }}
+      trust_classification:
+        description: Observed source trust classification.
+        value: ${{ jobs.metadata.outputs.trust_classification }}
+      execution_tier:
+        description: Observed execution tier.
+        value: ${{ jobs.metadata.outputs.execution_tier }}
+      plan_id:
+        description: Metadata validation plan identifier.
+        value: ${{ jobs.metadata.outputs.plan_id }}
+      build_id:
+        description: Provider build identifier when present.
+        value: ${{ jobs.metadata.outputs.build_id }}
+      conclusion:
+        description: Normalized conclusion.
+        value: ${{ jobs.metadata.outputs.conclusion }}
+      reason_code:
+        description: Stable conclusion reason.
+        value: ${{ jobs.metadata.outputs.reason_code }}
+      evidence_digest:
+        description: Canonical evidence digest.
+        value: ${{ jobs.metadata.outputs.evidence_digest }}
+      evidence_ref:
+        description: Immutable evidence artifact reference.
+        value: ${{ jobs.metadata.outputs.evidence_ref }}
+
+permissions: {}
+
+jobs:
+  metadata:
+    name: Mindclade / Repository Metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      correlation_id: ${{ steps.context.outputs.correlation_id }}
+      source_revision: ${{ inputs.source_revision }}
+      caller_repository: ${{ github.repository }}
+      trust_classification: ${{ steps.context.outputs.source_trust }}
+      execution_tier: ${{ steps.context.outputs.execution_tier }}
+      plan_id: metadata-v1
+      build_id: ${{ github.run_id }}
+      conclusion: ${{ steps.result.outputs.conclusion }}
+      reason_code: ${{ steps.result.outputs.reason_code }}
+      evidence_digest: ${{ steps.evidence.outputs.evidence_digest }}
+      evidence_ref: ${{ steps.evidence.outputs.evidence_ref }}
+    steps:
+      - id: context
+        name: Validate caller context
+        continue-on-error: true
+        uses: $/.github/actions/validate-trusted-context
+        with:
+          expected-source-revision: ${{ inputs.source_revision }}
+      - id: pins
+        name: Verify immutable implementation closure
+        continue-on-error: true
+        uses: $/.github/actions/verify-pinned-actions
+      - name: Check out exact caller revision
+        if: steps.context.outcome == 'success' && steps.pins.outcome == 'success'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_revision }}
+          persist-credentials: false
+      - id: check
+        name: Validate repository metadata
+        if: steps.context.outcome == 'success' && steps.pins.outcome == 'success'
+        continue-on-error: true
+        env:
+          COMPONENT_PATH: ${{ inputs.component_path }}
+          IMPLEMENTATION_ROOT: ${{ steps.context.outputs.implementation_root }}
+          REQUIRED_FILES: ${{ inputs.required_files }}
+        run: |
+          set -euo pipefail
+          python3 "${IMPLEMENTATION_ROOT}/tools/validate_reusable_workflows.py" metadata \
+            --root "${GITHUB_WORKSPACE}" \
+            --component-path "${COMPONENT_PATH}" \
+            --required-files "${REQUIRED_FILES}"
+      - id: result
+        name: Normalize result
+        if: always()
+        env:
+          CHECK_OUTCOME: ${{ steps.check.outcome }}
+          CONTEXT_OUTCOME: ${{ steps.context.outcome }}
+          CONTEXT_REASON: ${{ steps.context.outputs.reason_code }}
+          PINS_OUTCOME: ${{ steps.pins.outcome }}
+          PINS_REASON: ${{ steps.pins.outputs.reason_code }}
+        run: |
+          set -euo pipefail
+          conclusion=success
+          reason=METADATA_VALID
+          if [[ "${CONTEXT_OUTCOME}" != success ]]; then
+            conclusion=action_required
+            reason="${CONTEXT_REASON:-CONTEXT_INVALID}"
+          elif [[ "${PINS_OUTCOME}" != success ]]; then
+            conclusion=failure
+            reason="${PINS_REASON:-PIN_POLICY_FAILED}"
+          elif [[ "${CHECK_OUTCOME}" != success ]]; then
+            conclusion=failure
+            reason=METADATA_INVALID
+          fi
+          printf 'conclusion=%s\nreason_code=%s\n' "${conclusion}" "${reason}" >> "${GITHUB_OUTPUT}"
+      - id: evidence
+        name: Publish CI evidence
+        if: always() && steps.context.outputs.context_json != ''
+        continue-on-error: true
+        uses: $/.github/actions/publish-ci-evidence
+        with:
+          context-json: ${{ steps.context.outputs.context_json }}
+          producer: github_actions
+          conclusion: ${{ steps.result.outputs.conclusion }}
+          reason-code: ${{ steps.result.outputs.reason_code }}
+          plan-id: metadata-v1
+          build-id: ${{ github.run_id }}
+          artifact-name: metadata-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Enforce result
+        if: always()
+        env:
+          CONCLUSION: ${{ steps.result.outputs.conclusion }}
+          EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+        run: |
+          set -euo pipefail
+          [[ "${CONCLUSION}" == success ]]
+          [[ "${EVIDENCE_OUTCOME}" == success ]]

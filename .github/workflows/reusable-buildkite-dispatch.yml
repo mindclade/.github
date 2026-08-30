@@ -1,0 +1,244 @@
+name: Reusable Buildkite dispatch
+
+on:
+  workflow_call:
+    inputs:
+      source_revision:
+        description: Exact caller source commit SHA.
+        required: true
+        type: string
+      pipeline_definition_revision:
+        description: Exact protected commit that defines the Buildkite pipeline.
+        required: true
+        type: string
+      pipeline_class:
+        description: Isolated presubmit, protected continuous, or protected release pipeline.
+        required: false
+        default: presubmit
+        type: string
+    secrets:
+      buildkite_dispatch_token:
+        description: Buildkite token restricted to creating and cancelling builds.
+        required: false
+      buildkite_pipeline:
+        description: Buildkite pipeline slug selected by repository policy.
+        required: false
+    outputs:
+      correlation_id:
+        description: Stable correlation identifier.
+        value: ${{ jobs.dispatch.outputs.correlation_id }}
+      source_revision:
+        description: Validated source revision.
+        value: ${{ jobs.dispatch.outputs.source_revision }}
+      caller_repository:
+        description: Validated caller repository.
+        value: ${{ jobs.dispatch.outputs.caller_repository }}
+      trust_classification:
+        description: Observed source trust classification.
+        value: ${{ jobs.dispatch.outputs.trust_classification }}
+      execution_tier:
+        description: Observed execution tier.
+        value: ${{ jobs.dispatch.outputs.execution_tier }}
+      plan_id:
+        description: Buildkite plan identifier.
+        value: ${{ jobs.dispatch.outputs.plan_id }}
+      build_id:
+        description: Dispatched Buildkite build identifier.
+        value: ${{ jobs.dispatch.outputs.build_id }}
+      conclusion:
+        description: Normalized dispatch conclusion.
+        value: ${{ jobs.dispatch.outputs.conclusion }}
+      reason_code:
+        description: Stable conclusion reason.
+        value: ${{ jobs.dispatch.outputs.reason_code }}
+      evidence_digest:
+        description: Canonical dispatch evidence digest.
+        value: ${{ jobs.dispatch.outputs.evidence_digest }}
+      evidence_ref:
+        description: Immutable dispatch evidence artifact reference.
+        value: ${{ jobs.dispatch.outputs.evidence_ref }}
+      build_number:
+        description: Dispatched Buildkite build number.
+        value: ${{ jobs.dispatch.outputs.build_number }}
+      context_digest:
+        description: Digest of the validated trusted context.
+        value: ${{ jobs.dispatch.outputs.context_digest }}
+      pipeline_definition_revision:
+        description: Validated protected pipeline-definition revision.
+        value: ${{ jobs.dispatch.outputs.pipeline_definition_revision }}
+
+permissions: {}
+
+jobs:
+  dispatch:
+    name: Mindclade / Buildkite Dispatch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      correlation_id: ${{ steps.context.outputs.correlation_id }}
+      source_revision: ${{ inputs.source_revision }}
+      caller_repository: ${{ github.repository }}
+      trust_classification: ${{ steps.context.outputs.source_trust }}
+      execution_tier: ${{ steps.context.outputs.execution_tier }}
+      plan_id: buildkite-${{ inputs.pipeline_class }}-v1
+      build_id: ${{ steps.create.outputs.build_id }}
+      build_number: ${{ steps.create.outputs.build_number }}
+      conclusion: ${{ steps.result.outputs.conclusion }}
+      context_digest: ${{ steps.context.outputs.context_digest }}
+      reason_code: ${{ steps.result.outputs.reason_code }}
+      evidence_digest: ${{ steps.evidence.outputs.evidence_digest }}
+      evidence_ref: ${{ steps.evidence.outputs.evidence_ref }}
+      pipeline_definition_revision: ${{ inputs.pipeline_definition_revision }}
+    steps:
+      - id: context
+        name: Validate caller context
+        continue-on-error: true
+        uses: $/.github/actions/validate-trusted-context
+        with:
+          expected-source-revision: ${{ inputs.source_revision }}
+      - id: pins
+        name: Verify immutable implementation closure
+        continue-on-error: true
+        uses: $/.github/actions/verify-pinned-actions
+      - id: preflight
+        name: Bind pipeline and credentials before network access
+        if: steps.context.outcome == 'success' && steps.pins.outcome == 'success'
+        continue-on-error: true
+        env:
+          BASE_REVISION: ${{ steps.context.outputs.base_revision }}
+          BUILDKITE_PIPELINE: ${{ secrets.buildkite_pipeline }}
+          BUILDKITE_TOKEN: ${{ secrets.buildkite_dispatch_token }}
+          EXECUTION_TIER: ${{ steps.context.outputs.execution_tier }}
+          PIPELINE_CLASS: ${{ inputs.pipeline_class }}
+          PIPELINE_DEFINITION_REVISION: ${{ inputs.pipeline_definition_revision }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          set -euo pipefail
+          [[ "${PIPELINE_DEFINITION_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          [[ -n "${BUILDKITE_TOKEN}" && -n "${BUILDKITE_PIPELINE}" ]]
+          case "${EXECUTION_TIER}:${PIPELINE_CLASS}" in
+            untrusted:presubmit)
+              [[ "${PIPELINE_DEFINITION_REVISION}" == "${BASE_REVISION}" ]]
+              ;;
+            trusted:protected)
+              [[ "${PIPELINE_DEFINITION_REVISION}" == "${SOURCE_REVISION}" ]]
+              ;;
+            release:release)
+              [[ "${PIPELINE_DEFINITION_REVISION}" == "${SOURCE_REVISION}" ]]
+              ;;
+            *)
+              exit 1
+              ;;
+          esac
+      - id: create
+        name: Dispatch isolated Buildkite build
+        if: steps.preflight.outcome == 'success'
+        continue-on-error: true
+        env:
+          BASE_REVISION: ${{ steps.context.outputs.base_revision }}
+          BUILDKITE_API_TOKEN: ${{ secrets.buildkite_dispatch_token }}
+          BUILDKITE_ORGANIZATION: ${{ github.repository_owner }}
+          BUILDKITE_PIPELINE: ${{ secrets.buildkite_pipeline }}
+          CONTEXT_JSON: ${{ steps.context.outputs.context_json }}
+          CONTEXT_DIGEST: ${{ steps.context.outputs.context_digest }}
+          CORRELATION_ID: ${{ steps.context.outputs.correlation_id }}
+          EXECUTION_TIER: ${{ steps.context.outputs.execution_tier }}
+          IMPLEMENTATION_ROOT: ${{ steps.context.outputs.implementation_root }}
+          PIPELINE_CLASS: ${{ inputs.pipeline_class }}
+          PIPELINE_DEFINITION_REVISION: ${{ inputs.pipeline_definition_revision }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+          SOURCE_TRUST: ${{ steps.context.outputs.source_trust }}
+        run: |
+          set -euo pipefail
+          env_json="$(python3 - <<'PY'
+          import json
+          import os
+
+          names = (
+              "BASE_REVISION", "CONTEXT_DIGEST", "CORRELATION_ID",
+              "EXECUTION_TIER", "PIPELINE_CLASS",
+              "PIPELINE_DEFINITION_REVISION", "SOURCE_REVISION", "SOURCE_TRUST",
+          )
+          values = {f"MINDCLADE_{name}": os.environ[name] for name in names}
+          values["MINDCLADE_CONTEXT_JSON"] = os.environ["CONTEXT_JSON"]
+          print(json.dumps(values, separators=(",", ":")))
+          PY
+          )"
+          branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
+          python3 "${IMPLEMENTATION_ROOT}/tools/emit_ci_evidence.py" buildkite-dispatch \
+            --pipeline "${BUILDKITE_PIPELINE}" \
+            --commit "${SOURCE_REVISION}" \
+            --branch "${branch}" \
+            --message "Mindclade ${PIPELINE_CLASS} ${CORRELATION_ID}" \
+            --env-json "${env_json}" \
+            --github-output "${GITHUB_OUTPUT}"
+      - id: cancel
+        name: Cancel dispatched build when this run is cancelled
+        if: cancelled() && steps.create.outputs.build_id != '' && steps.create.outputs.build_number != ''
+        continue-on-error: true
+        env:
+          BUILDKITE_API_TOKEN: ${{ secrets.buildkite_dispatch_token }}
+          BUILDKITE_ORGANIZATION: ${{ github.repository_owner }}
+          BUILDKITE_PIPELINE: ${{ secrets.buildkite_pipeline }}
+          BUILD_ID: ${{ steps.create.outputs.build_id }}
+          BUILD_NUMBER: ${{ steps.create.outputs.build_number }}
+          IMPLEMENTATION_ROOT: ${{ steps.context.outputs.implementation_root }}
+        run: |
+          set -euo pipefail
+          python3 "${IMPLEMENTATION_ROOT}/tools/emit_ci_evidence.py" buildkite-cancel \
+            --pipeline "${BUILDKITE_PIPELINE}" \
+            --build-id "${BUILD_ID}" \
+            --build-number "${BUILD_NUMBER}"
+      - id: result
+        name: Normalize dispatch result
+        if: always()
+        env:
+          CONTEXT_OUTCOME: ${{ steps.context.outcome }}
+          CONTEXT_REASON: ${{ steps.context.outputs.reason_code }}
+          CREATE_OUTCOME: ${{ steps.create.outcome }}
+          PINS_OUTCOME: ${{ steps.pins.outcome }}
+          PINS_REASON: ${{ steps.pins.outputs.reason_code }}
+          PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
+        run: |
+          set -euo pipefail
+          conclusion=success
+          reason=BUILDKITE_DISPATCHED
+          if [[ "${CONTEXT_OUTCOME}" != success ]]; then
+            conclusion=action_required
+            reason="${CONTEXT_REASON:-CONTEXT_INVALID}"
+          elif [[ "${PINS_OUTCOME}" != success ]]; then
+            conclusion=failure
+            reason="${PINS_REASON:-PIN_POLICY_FAILED}"
+          elif [[ "${PREFLIGHT_OUTCOME}" != success ]]; then
+            conclusion=action_required
+            reason=BUILDKITE_PREFLIGHT_FAILED
+          elif [[ "${CREATE_OUTCOME}" != success ]]; then
+            conclusion=failure
+            reason=BUILDKITE_DISPATCH_FAILED
+          fi
+          printf 'conclusion=%s\nreason_code=%s\n' "${conclusion}" "${reason}" >> "${GITHUB_OUTPUT}"
+      - id: evidence
+        name: Publish dispatch evidence
+        if: always() && steps.preflight.outcome == 'success'
+        continue-on-error: true
+        uses: $/.github/actions/publish-ci-evidence
+        with:
+          context-json: ${{ steps.context.outputs.context_json }}
+          producer: github_actions
+          conclusion: ${{ steps.result.outputs.conclusion }}
+          reason-code: ${{ steps.result.outputs.reason_code }}
+          plan-id: buildkite-${{ inputs.pipeline_class }}-v1
+          build-id: ${{ steps.create.outputs.build_id || github.run_id }}
+          pipeline-definition-revision: ${{ inputs.pipeline_definition_revision }}
+          artifact-name: buildkite-dispatch-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Enforce dispatch result
+        if: always()
+        env:
+          CONCLUSION: ${{ steps.result.outputs.conclusion }}
+          EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+        run: |
+          set -euo pipefail
+          [[ "${CONCLUSION}" == success ]]
+          [[ "${EVIDENCE_OUTCOME}" == success ]]

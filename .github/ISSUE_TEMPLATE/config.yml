@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security-sensitive report
+    url: mailto:engineering@mindclade.com
+    about: Report vulnerabilities, credentials, or sensitive security information privately.
+  - name: Contribution and support guidance
+    url: https://github.com/mindclade/.github/blob/main/SUPPORT.md
+    about: Read support routing and contribution expectations before opening an issue.

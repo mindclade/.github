@@ -1,0 +1,145 @@
+name: Reusable documentation check
+
+on:
+  workflow_call:
+    inputs:
+      source_revision:
+        description: Exact caller source commit SHA.
+        required: true
+        type: string
+      documentation_roots:
+        description: Newline-separated repository-relative Markdown roots.
+        required: false
+        default: README.md
+        type: string
+    outputs:
+      correlation_id:
+        description: Stable correlation identifier.
+        value: ${{ jobs.documentation.outputs.correlation_id }}
+      source_revision:
+        description: Validated source revision.
+        value: ${{ jobs.documentation.outputs.source_revision }}
+      caller_repository:
+        description: Validated caller repository.
+        value: ${{ jobs.documentation.outputs.caller_repository }}
+      trust_classification:
+        description: Observed source trust classification.
+        value: ${{ jobs.documentation.outputs.trust_classification }}
+      execution_tier:
+        description: Observed execution tier.
+        value: ${{ jobs.documentation.outputs.execution_tier }}
+      plan_id:
+        description: Documentation validation plan identifier.
+        value: ${{ jobs.documentation.outputs.plan_id }}
+      build_id:
+        description: Provider build identifier.
+        value: ${{ jobs.documentation.outputs.build_id }}
+      conclusion:
+        description: Normalized conclusion.
+        value: ${{ jobs.documentation.outputs.conclusion }}
+      reason_code:
+        description: Stable conclusion reason.
+        value: ${{ jobs.documentation.outputs.reason_code }}
+      evidence_digest:
+        description: Canonical evidence digest.
+        value: ${{ jobs.documentation.outputs.evidence_digest }}
+      evidence_ref:
+        description: Immutable evidence artifact reference.
+        value: ${{ jobs.documentation.outputs.evidence_ref }}
+
+permissions: {}
+
+jobs:
+  documentation:
+    name: Mindclade / Documentation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      correlation_id: ${{ steps.context.outputs.correlation_id }}
+      source_revision: ${{ inputs.source_revision }}
+      caller_repository: ${{ github.repository }}
+      trust_classification: ${{ steps.context.outputs.source_trust }}
+      execution_tier: ${{ steps.context.outputs.execution_tier }}
+      plan_id: documentation-v1
+      build_id: ${{ github.run_id }}
+      conclusion: ${{ steps.result.outputs.conclusion }}
+      reason_code: ${{ steps.result.outputs.reason_code }}
+      evidence_digest: ${{ steps.evidence.outputs.evidence_digest }}
+      evidence_ref: ${{ steps.evidence.outputs.evidence_ref }}
+    steps:
+      - id: context
+        name: Validate caller context
+        continue-on-error: true
+        uses: $/.github/actions/validate-trusted-context
+        with:
+          expected-source-revision: ${{ inputs.source_revision }}
+      - id: pins
+        name: Verify immutable implementation closure
+        continue-on-error: true
+        uses: $/.github/actions/verify-pinned-actions
+      - name: Check out exact caller revision
+        if: steps.context.outcome == 'success' && steps.pins.outcome == 'success'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_revision }}
+          persist-credentials: false
+      - id: check
+        name: Validate documentation
+        if: steps.context.outcome == 'success' && steps.pins.outcome == 'success'
+        continue-on-error: true
+        env:
+          DOCUMENTATION_ROOTS: ${{ inputs.documentation_roots }}
+          IMPLEMENTATION_ROOT: ${{ steps.context.outputs.implementation_root }}
+        run: |
+          set -euo pipefail
+          python3 "${IMPLEMENTATION_ROOT}/tools/validate_reusable_workflows.py" documentation \
+            --root "${GITHUB_WORKSPACE}" \
+            --documentation-roots "${DOCUMENTATION_ROOTS}"
+      - id: result
+        name: Normalize result
+        if: always()
+        env:
+          CHECK_OUTCOME: ${{ steps.check.outcome }}
+          CONTEXT_OUTCOME: ${{ steps.context.outcome }}
+          CONTEXT_REASON: ${{ steps.context.outputs.reason_code }}
+          PINS_OUTCOME: ${{ steps.pins.outcome }}
+          PINS_REASON: ${{ steps.pins.outputs.reason_code }}
+        run: |
+          set -euo pipefail
+          conclusion=success
+          reason=DOCUMENTATION_VALID
+          if [[ "${CONTEXT_OUTCOME}" != success ]]; then
+            conclusion=action_required
+            reason="${CONTEXT_REASON:-CONTEXT_INVALID}"
+          elif [[ "${PINS_OUTCOME}" != success ]]; then
+            conclusion=failure
+            reason="${PINS_REASON:-PIN_POLICY_FAILED}"
+          elif [[ "${CHECK_OUTCOME}" != success ]]; then
+            conclusion=failure
+            reason=DOCUMENTATION_INVALID
+          fi
+          printf 'conclusion=%s\nreason_code=%s\n' "${conclusion}" "${reason}" >> "${GITHUB_OUTPUT}"
+      - id: evidence
+        name: Publish CI evidence
+        if: always() && steps.context.outputs.context_json != ''
+        continue-on-error: true
+        uses: $/.github/actions/publish-ci-evidence
+        with:
+          context-json: ${{ steps.context.outputs.context_json }}
+          producer: github_actions
+          conclusion: ${{ steps.result.outputs.conclusion }}
+          reason-code: ${{ steps.result.outputs.reason_code }}
+          plan-id: documentation-v1
+          build-id: ${{ github.run_id }}
+          artifact-name: documentation-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Enforce result
+        if: always()
+        env:
+          CONCLUSION: ${{ steps.result.outputs.conclusion }}
+          EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+        run: |
+          set -euo pipefail
+          [[ "${CONCLUSION}" == success ]]
+          [[ "${EVIDENCE_OUTCOME}" == success ]]

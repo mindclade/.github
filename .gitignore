@@ -1,0 +1,14 @@
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+.env
+.env.*
+!.env.example
+coverage/
+dist/
+build/
+__pycache__/
+*.py[cod]

@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mindclade.dev/schemas/trusted-context/v1.0.0",
+  "title": "Mindclade trusted workflow context",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "correlation_id",
+    "repository",
+    "actor",
+    "event_name",
+    "ref",
+    "source_revision",
+    "base_revision",
+    "workflow_ref",
+    "workflow_revision",
+    "fork",
+    "ref_protected",
+    "source_trust",
+    "execution_tier"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0.0" },
+    "correlation_id": { "$ref": "#/$defs/correlationId" },
+    "repository": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" },
+    "actor": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,38}(?:\\[bot\\])?$" },
+    "event_name": { "enum": ["pull_request", "push", "release", "schedule", "workflow_dispatch", "merge_group"] },
+    "ref": { "type": "string", "pattern": "^refs/(heads|tags)/[A-Za-z0-9._/-]+$" },
+    "source_revision": { "$ref": "#/$defs/gitSha" },
+    "base_revision": { "oneOf": [{ "$ref": "#/$defs/gitSha" }, { "type": "null" }] },
+    "workflow_ref": { "type": "string", "pattern": "^\\.github/workflows/[A-Za-z0-9._-]+\\.ya?ml$" },
+    "workflow_revision": { "$ref": "#/$defs/gitSha" },
+    "fork": { "type": "boolean" },
+    "ref_protected": { "type": "boolean" },
+    "source_trust": { "enum": ["untrusted", "trusted", "protected"] },
+    "execution_tier": { "enum": ["untrusted", "trusted", "release"] }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "event_name": { "enum": ["pull_request", "merge_group"] } }, "required": ["event_name"] },
+      "then": { "properties": { "execution_tier": { "const": "untrusted" } } }
+    },
+    {
+      "if": { "properties": { "event_name": { "const": "release" } }, "required": ["event_name"] },
+      "then": {
+        "properties": {
+          "execution_tier": { "const": "release" },
+          "source_trust": { "const": "protected" },
+          "fork": { "const": false },
+          "ref_protected": { "const": true },
+          "ref": { "pattern": "^refs/tags/[A-Za-z0-9._/-]+$" }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "correlationId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$" },
+    "gitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+  }
+}

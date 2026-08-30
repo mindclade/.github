@@ -1,0 +1,212 @@
+name: Reusable required check
+
+on:
+  workflow_call:
+    inputs:
+      source_revision:
+        description: Exact caller source commit SHA.
+        required: true
+        type: string
+      pipeline_definition_revision:
+        description: Exact protected commit that defined the Buildkite pipeline.
+        required: true
+        type: string
+      build_id:
+        description: Buildkite build UUID returned by dispatch.
+        required: true
+        type: string
+      build_number:
+        description: Buildkite build number returned by dispatch.
+        required: true
+        type: string
+      correlation_id:
+        description: Correlation identifier returned by dispatch.
+        required: true
+        type: string
+      context_digest:
+        description: Trusted-context digest returned by dispatch.
+        required: true
+        type: string
+      timeout_seconds:
+        description: Maximum bounded polling interval in seconds.
+        required: false
+        default: 3600
+        type: number
+    secrets:
+      buildkite_evidence_token:
+        description: Read-only Buildkite token for build state and evidence artifacts.
+        required: false
+      buildkite_pipeline:
+        description: Buildkite pipeline slug selected by repository policy.
+        required: false
+    outputs:
+      correlation_id:
+        description: Stable correlation identifier.
+        value: ${{ jobs.required.outputs.correlation_id }}
+      source_revision:
+        description: Validated source revision.
+        value: ${{ jobs.required.outputs.source_revision }}
+      caller_repository:
+        description: Validated caller repository.
+        value: ${{ jobs.required.outputs.caller_repository }}
+      trust_classification:
+        description: Observed source trust classification.
+        value: ${{ jobs.required.outputs.trust_classification }}
+      execution_tier:
+        description: Observed execution tier.
+        value: ${{ jobs.required.outputs.execution_tier }}
+      plan_id:
+        description: Required-check plan identifier.
+        value: ${{ jobs.required.outputs.plan_id }}
+      build_id:
+        description: Verified Buildkite build identifier.
+        value: ${{ jobs.required.outputs.build_id }}
+      conclusion:
+        description: Normalized required-check conclusion.
+        value: ${{ jobs.required.outputs.conclusion }}
+      reason_code:
+        description: Stable conclusion reason.
+        value: ${{ jobs.required.outputs.reason_code }}
+      evidence_digest:
+        description: Canonical verifier evidence digest.
+        value: ${{ jobs.required.outputs.evidence_digest }}
+      evidence_ref:
+        description: Immutable verifier evidence artifact reference.
+        value: ${{ jobs.required.outputs.evidence_ref }}
+
+permissions: {}
+
+jobs:
+  required:
+    name: Mindclade / Required
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    permissions:
+      contents: read
+    outputs:
+      correlation_id: ${{ steps.context.outputs.correlation_id }}
+      source_revision: ${{ inputs.source_revision }}
+      caller_repository: ${{ github.repository }}
+      trust_classification: ${{ steps.context.outputs.source_trust }}
+      execution_tier: ${{ steps.context.outputs.execution_tier }}
+      plan_id: buildkite-required-v1
+      build_id: ${{ inputs.build_id }}
+      conclusion: ${{ steps.result.outputs.conclusion }}
+      reason_code: ${{ steps.result.outputs.reason_code }}
+      evidence_digest: ${{ steps.evidence.outputs.evidence_digest }}
+      evidence_ref: ${{ steps.evidence.outputs.evidence_ref }}
+    steps:
+      - id: context
+        name: Validate caller context
+        continue-on-error: true
+        uses: $/.github/actions/validate-trusted-context
+        with:
+          expected-source-revision: ${{ inputs.source_revision }}
+      - id: pins
+        name: Verify immutable implementation closure
+        continue-on-error: true
+        uses: $/.github/actions/verify-pinned-actions
+      - id: preflight
+        name: Validate immutable bindings before network access
+        if: steps.context.outcome == 'success' && steps.pins.outcome == 'success'
+        continue-on-error: true
+        env:
+          BUILD_ID: ${{ inputs.build_id }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
+          BUILDKITE_PIPELINE: ${{ secrets.buildkite_pipeline }}
+          BUILDKITE_TOKEN: ${{ secrets.buildkite_evidence_token }}
+          CONTEXT_DIGEST: ${{ inputs.context_digest }}
+          CORRELATION_ID: ${{ inputs.correlation_id }}
+          OBSERVED_CONTEXT_DIGEST: ${{ steps.context.outputs.context_digest }}
+          OBSERVED_CORRELATION_ID: ${{ steps.context.outputs.correlation_id }}
+          PIPELINE_DEFINITION_REVISION: ${{ inputs.pipeline_definition_revision }}
+        run: |
+          set -euo pipefail
+          [[ "${BUILD_ID}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
+          [[ "${BUILD_NUMBER}" =~ ^[1-9][0-9]*$ ]]
+          [[ -n "${BUILDKITE_TOKEN}" && -n "${BUILDKITE_PIPELINE}" ]]
+          [[ "${PIPELINE_DEFINITION_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${CONTEXT_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${CORRELATION_ID}" == "${OBSERVED_CORRELATION_ID}" ]]
+          [[ "${CONTEXT_DIGEST}" == "${OBSERVED_CONTEXT_DIGEST}" ]]
+      - id: verify
+        name: Await and verify Buildkite evidence
+        if: steps.preflight.outcome == 'success'
+        continue-on-error: true
+        env:
+          BUILD_ID: ${{ inputs.build_id }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
+          BUILDKITE_API_TOKEN: ${{ secrets.buildkite_evidence_token }}
+          BUILDKITE_ORGANIZATION: ${{ github.repository_owner }}
+          BUILDKITE_PIPELINE: ${{ secrets.buildkite_pipeline }}
+          CONTEXT_DIGEST: ${{ inputs.context_digest }}
+          CORRELATION_ID: ${{ inputs.correlation_id }}
+          EXPECTED_SOURCE_REVISION: ${{ inputs.source_revision }}
+          IMPLEMENTATION_ROOT: ${{ steps.context.outputs.implementation_root }}
+          PIPELINE_DEFINITION_REVISION: ${{ inputs.pipeline_definition_revision }}
+          TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
+        run: |
+          set -euo pipefail
+          python3 "${IMPLEMENTATION_ROOT}/tools/emit_ci_evidence.py" buildkite-verify \
+            --pipeline "${BUILDKITE_PIPELINE}" \
+            --build-id "${BUILD_ID}" \
+            --build-number "${BUILD_NUMBER}" \
+            --timeout-seconds "${TIMEOUT_SECONDS}" \
+            --expected-source-revision "${EXPECTED_SOURCE_REVISION}" \
+            --expected-pipeline-definition-revision "${PIPELINE_DEFINITION_REVISION}" \
+            --expected-correlation-id "${CORRELATION_ID}" \
+            --expected-context-digest "${CONTEXT_DIGEST}" \
+            --github-output "${GITHUB_OUTPUT}"
+      - id: result
+        name: Normalize required-check result
+        if: always()
+        env:
+          CONTEXT_OUTCOME: ${{ steps.context.outcome }}
+          CONTEXT_REASON: ${{ steps.context.outputs.reason_code }}
+          PINS_OUTCOME: ${{ steps.pins.outcome }}
+          PINS_REASON: ${{ steps.pins.outputs.reason_code }}
+          PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+          VERIFY_REASON: ${{ steps.verify.outputs.reason_code }}
+        run: |
+          set -euo pipefail
+          conclusion=success
+          reason=BUILDKITE_EVIDENCE_VERIFIED
+          if [[ "${CONTEXT_OUTCOME}" != success ]]; then
+            conclusion=action_required
+            reason="${CONTEXT_REASON:-CONTEXT_INVALID}"
+          elif [[ "${PINS_OUTCOME}" != success ]]; then
+            conclusion=failure
+            reason="${PINS_REASON:-PIN_POLICY_FAILED}"
+          elif [[ "${PREFLIGHT_OUTCOME}" != success ]]; then
+            conclusion=action_required
+            reason=BUILDKITE_EVIDENCE_PREFLIGHT_FAILED
+          elif [[ "${VERIFY_OUTCOME}" != success ]]; then
+            conclusion=failure
+            reason="${VERIFY_REASON:-BUILDKITE_EVIDENCE_INVALID}"
+          fi
+          printf 'conclusion=%s\nreason_code=%s\n' "${conclusion}" "${reason}" >> "${GITHUB_OUTPUT}"
+      - id: evidence
+        name: Publish required-check evidence
+        if: always() && steps.preflight.outcome == 'success'
+        continue-on-error: true
+        uses: $/.github/actions/publish-ci-evidence
+        with:
+          context-json: ${{ steps.context.outputs.context_json }}
+          producer: github_actions
+          conclusion: ${{ steps.result.outputs.conclusion }}
+          reason-code: ${{ steps.result.outputs.reason_code }}
+          plan-id: buildkite-required-v1
+          build-id: ${{ inputs.build_id }}
+          pipeline-definition-revision: ${{ inputs.pipeline_definition_revision }}
+          report-paths: ${{ steps.verify.outputs.evidence_path }}
+          artifact-name: buildkite-required-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Enforce required result
+        if: always()
+        env:
+          CONCLUSION: ${{ steps.result.outputs.conclusion }}
+          EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+        run: |
+          set -euo pipefail
+          [[ "${CONCLUSION}" == success ]]
+          [[ "${EVIDENCE_OUTCOME}" == success ]]

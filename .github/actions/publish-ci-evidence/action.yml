@@ -1,0 +1,115 @@
+name: Publish CI evidence
+description: Canonicalize, validate, digest, and upload a typed CI evidence record.
+
+inputs:
+  context-json:
+    description: Canonical trusted-context JSON produced by validate-trusted-context.
+    required: true
+  producer:
+    description: Evidence producer, github_actions or buildkite.
+    required: true
+  conclusion:
+    description: success, failure, cancelled, timed_out, or action_required.
+    required: true
+  reason-code:
+    description: Stable machine-readable conclusion reason.
+    required: true
+  plan-id:
+    description: Optional provider plan identifier.
+    required: false
+    default: ""
+  build-id:
+    description: Optional provider build identifier.
+    required: false
+    default: ""
+  pipeline-definition-revision:
+    description: Protected pipeline-definition commit SHA when applicable.
+    required: false
+    default: ""
+  report-paths:
+    description: Newline-separated report files to include in the evidence artifact.
+    required: false
+    default: ""
+  artifact-name:
+    description: Optional unique artifact name.
+    required: false
+    default: ""
+
+outputs:
+  evidence_json:
+    description: Canonical evidence JSON.
+    value: ${{ steps.emit.outputs.evidence_json }}
+  evidence_path:
+    description: Runner-local evidence path.
+    value: ${{ steps.emit.outputs.evidence_path }}
+  evidence_digest:
+    description: SHA-256 digest of canonical evidence JSON.
+    value: ${{ steps.emit.outputs.evidence_digest }}
+  evidence_ref:
+    description: Immutable GitHub artifact reference.
+    value: ${{ steps.reference.outputs.evidence_ref }}
+  artifact_id:
+    description: GitHub artifact identifier.
+    value: ${{ steps.upload.outputs.artifact-id }}
+  artifact_url:
+    description: GitHub artifact URL.
+    value: ${{ steps.upload.outputs.artifact-url }}
+
+runs:
+  using: composite
+  steps:
+    - id: emit
+      name: Emit canonical evidence
+      shell: bash
+      env:
+        ARTIFACT_NAME_INPUT: ${{ inputs.artifact-name }}
+        BUILD_ID: ${{ inputs.build-id }}
+        CONCLUSION: ${{ inputs.conclusion }}
+        CONTEXT_JSON: ${{ inputs.context-json }}
+        IMPLEMENTATION_ROOT: ${{ github.action_path }}/../../..
+        PIPELINE_DEFINITION_REVISION: ${{ inputs.pipeline-definition-revision }}
+        PLAN_ID: ${{ inputs.plan-id }}
+        PRODUCER: ${{ inputs.producer }}
+        REASON_CODE: ${{ inputs.reason-code }}
+        REPORT_PATHS: ${{ inputs.report-paths }}
+      run: |
+        set -euo pipefail
+        artifact_name="${ARTIFACT_NAME_INPUT}"
+        if [[ -z "${artifact_name}" ]]; then
+          artifact_name="ci-evidence-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+        fi
+        python3 "${IMPLEMENTATION_ROOT}/tools/emit_ci_evidence.py" emit \
+          --context-json "${CONTEXT_JSON}" \
+          --producer "${PRODUCER}" \
+          --conclusion "${CONCLUSION}" \
+          --reason-code "${REASON_CODE}" \
+          --plan-id "${PLAN_ID}" \
+          --build-id "${BUILD_ID}" \
+          --pipeline-definition-revision "${PIPELINE_DEFINITION_REVISION}" \
+          --report-paths "${REPORT_PATHS}" \
+          --artifact-name "${artifact_name}" \
+          --output "${RUNNER_TEMP}/ci-evidence.json" \
+          --github-output "${GITHUB_OUTPUT}"
+    - id: upload
+      name: Upload immutable evidence artifact
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ steps.emit.outputs.artifact_name }}
+        path: |
+          ${{ steps.emit.outputs.evidence_path }}
+          ${{ inputs.report-paths }}
+        if-no-files-found: error
+        include-hidden-files: false
+        overwrite: false
+        retention-days: 90
+    - id: reference
+      name: Bind artifact reference to evidence digest
+      shell: bash
+      env:
+        ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        EVIDENCE_DIGEST: ${{ steps.emit.outputs.evidence_digest }}
+      run: |
+        set -euo pipefail
+        printf 'evidence_ref=github-actions://%s/%s/artifacts/%s?digest=%s\n' \
+          "${GITHUB_REPOSITORY}" "${GITHUB_RUN_ID}" "${ARTIFACT_ID}" \
+          "${EVIDENCE_DIGEST}" >> "${GITHUB_OUTPUT}"

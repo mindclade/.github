@@ -1,0 +1,40 @@
+name: Security control gap
+description: Report a non-sensitive gap in a declared security control or review process.
+title: "security: "
+labels: [security]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not disclose vulnerabilities, credentials, exploit details, or sensitive evidence here. Send those privately to engineering@mindclade.com as described in SECURITY.md.
+  - type: textarea
+    id: control
+    attributes:
+      label: Control or boundary
+      description: Identify the source path, workflow, policy, or review boundary at issue.
+    validations:
+      required: true
+  - type: textarea
+    id: gap
+    attributes:
+      label: Observed gap
+      description: Explain the non-sensitive condition and expected control behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Potential impact
+      description: Describe impact without including exploit instructions or private data.
+    validations:
+      required: true
+  - type: dropdown
+    id: activation_state
+    attributes:
+      label: Activation state
+      options:
+        - source-ready
+        - connected
+        - unknown
+    validations:
+      required: true

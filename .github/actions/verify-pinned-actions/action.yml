@@ -1,0 +1,46 @@
+name: Verify pinned actions
+description: Enforce immutable action, workflow, container, and permission policy.
+
+inputs:
+  root:
+    description: Repository root to inspect; defaults to this implementation repository.
+    required: false
+    default: ""
+
+outputs:
+  verdict:
+    description: PASS or FAIL.
+    value: ${{ steps.verify.outputs.verdict }}
+  reason_code:
+    description: Stable machine-readable verification reason.
+    value: ${{ steps.verify.outputs.reason_code }}
+  closure_digest:
+    description: Digest of the normalized dependency closure.
+    value: ${{ steps.verify.outputs.closure_digest }}
+  violations_json:
+    description: Canonical JSON array of violations.
+    value: ${{ steps.verify.outputs.violations_json }}
+  implementation_root:
+    description: Absolute root of the immutable workflow implementation checkout.
+    value: ${{ steps.verify.outputs.implementation_root }}
+
+runs:
+  using: composite
+  steps:
+    - id: verify
+      name: Verify source closure
+      shell: bash
+      env:
+        REQUESTED_ROOT: ${{ inputs.root }}
+        IMPLEMENTATION_ROOT: ${{ github.action_path }}/../../..
+      run: |
+        set -euo pipefail
+        root="${REQUESTED_ROOT}"
+        if [[ -z "${root}" ]]; then
+          root="${IMPLEMENTATION_ROOT}"
+        fi
+        python3 "${IMPLEMENTATION_ROOT}/tools/validate_reusable_workflows.py" validate \
+          --root "${root}" \
+          --checks pins,permissions,workflows,schemas \
+          --implementation-root "${IMPLEMENTATION_ROOT}" \
+          --github-output "${GITHUB_OUTPUT}"

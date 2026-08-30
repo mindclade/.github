@@ -1,0 +1,279 @@
+name: Reusable OpenSSF Scorecard
+
+on:
+  workflow_call:
+    inputs:
+      source_revision:
+        description: Exact protected caller source commit SHA.
+        required: true
+        type: string
+    outputs:
+      correlation_id:
+        description: Stable correlation identifier.
+        value: ${{ jobs.finalize.outputs.correlation_id }}
+      source_revision:
+        description: Validated source revision.
+        value: ${{ jobs.finalize.outputs.source_revision }}
+      caller_repository:
+        description: Validated caller repository.
+        value: ${{ jobs.finalize.outputs.caller_repository }}
+      trust_classification:
+        description: Observed source trust classification.
+        value: ${{ jobs.finalize.outputs.trust_classification }}
+      execution_tier:
+        description: Observed execution tier.
+        value: ${{ jobs.finalize.outputs.execution_tier }}
+      plan_id:
+        description: Scorecard plan identifier.
+        value: ${{ jobs.finalize.outputs.plan_id }}
+      build_id:
+        description: Provider build identifier.
+        value: ${{ jobs.finalize.outputs.build_id }}
+      conclusion:
+        description: Normalized conclusion.
+        value: ${{ jobs.finalize.outputs.conclusion }}
+      reason_code:
+        description: Stable conclusion reason.
+        value: ${{ jobs.finalize.outputs.reason_code }}
+      evidence_digest:
+        description: Canonical evidence digest.
+        value: ${{ jobs.finalize.outputs.evidence_digest }}
+      evidence_ref:
+        description: Immutable evidence artifact reference.
+        value: ${{ jobs.finalize.outputs.evidence_ref }}
+
+permissions: {}
+
+jobs:
+  prepare:
+    name: Mindclade / Scorecard Context
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      context_json: ${{ steps.context.outputs.context_json }}
+      correlation_id: ${{ steps.context.outputs.correlation_id }}
+      source_revision: ${{ steps.context.outputs.source_revision }}
+      caller_repository: ${{ github.repository }}
+      trust_classification: ${{ steps.context.outputs.source_trust }}
+      execution_tier: ${{ steps.context.outputs.execution_tier }}
+      context_outcome: ${{ steps.context.outcome }}
+      context_reason: ${{ steps.context.outputs.reason_code }}
+      pins_outcome: ${{ steps.pins.outcome }}
+      pins_reason: ${{ steps.pins.outputs.reason_code }}
+    steps:
+      - id: context
+        name: Validate protected caller context
+        uses: $/.github/actions/validate-trusted-context
+        with:
+          expected-source-revision: ${{ inputs.source_revision }}
+          allowed-execution-tiers: trusted,release
+      - id: pins
+        name: Verify immutable implementation closure
+        uses: $/.github/actions/verify-pinned-actions
+      - name: Enforce protected preflight
+        if: always()
+        env:
+          CONTEXT_OUTCOME: ${{ steps.context.outcome }}
+          PINS_OUTCOME: ${{ steps.pins.outcome }}
+        run: |
+          set -euo pipefail
+          [[ "${CONTEXT_OUTCOME}" == success ]]
+          [[ "${PINS_OUTCOME}" == success ]]
+
+  scorecard:
+    name: Mindclade / OpenSSF Scorecard
+    needs: prepare
+    if: needs.prepare.result == 'success' && (needs.prepare.outputs.execution_tier == 'trusted' || needs.prepare.outputs.execution_tier == 'release')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    outputs:
+      plan_id: scorecard-protected-v1
+      build_id: ${{ github.run_id }}
+      conclusion: ${{ steps.result.outputs.conclusion }}
+      reason_code: ${{ steps.result.outputs.reason_code }}
+      evidence_digest: ${{ steps.evidence.outputs.evidence_digest }}
+      evidence_ref: ${{ steps.evidence.outputs.evidence_ref }}
+    steps:
+      - id: checkout
+        name: Check out exact protected revision
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source_revision }}
+          persist-credentials: false
+      - id: scan
+        name: Run digest-pinned Scorecard container
+        if: steps.checkout.outcome == 'success'
+        continue-on-error: true
+        env:
+          INPUT_FILE_MODE: git
+          INPUT_PUBLISH_RESULTS: "false"
+          INPUT_REPO_TOKEN: ${{ github.token }}
+          SCORECARD_IMAGE: ghcr.io/ossf/scorecard-action@sha256:ae5104dd3cc28466ebeb11144354be4cac4b7ff829654f9fab89021d71c46670
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            --env GITHUB_ACTOR \
+            --env GITHUB_API_URL \
+            --env GITHUB_BASE_REF \
+            --env GITHUB_EVENT_NAME \
+            --env GITHUB_EVENT_PATH=/github/workflow/event.json \
+            --env GITHUB_GRAPHQL_URL \
+            --env GITHUB_HEAD_REF \
+            --env GITHUB_REF \
+            --env GITHUB_REPOSITORY \
+            --env GITHUB_REPOSITORY_OWNER \
+            --env GITHUB_SERVER_URL \
+            --env GITHUB_SHA \
+            --env GITHUB_WORKSPACE=/github/workspace \
+            --env HOME=/github/home \
+            --env INPUT_FILE_MODE \
+            --env INPUT_PUBLISH_RESULTS \
+            --env INPUT_REPO_TOKEN \
+            --env INPUT_RESULTS_FILE=scorecard-results.sarif \
+            --env INPUT_RESULTS_FORMAT=sarif \
+            --volume "${GITHUB_EVENT_PATH}:/github/workflow/event.json:ro" \
+            --volume "${RUNNER_TEMP}:/github/home" \
+            --volume "${GITHUB_WORKSPACE}:/github/workspace" \
+            --workdir /github/workspace \
+            "${SCORECARD_IMAGE}"
+          test -s scorecard-results.sarif
+      - id: upload
+        name: Upload Scorecard SARIF
+        if: steps.scan.outcome == 'success'
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.35.1
+        with:
+          sarif_file: scorecard-results.sarif
+      - id: result
+        name: Normalize result
+        if: always()
+        env:
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          SCAN_OUTCOME: ${{ steps.scan.outcome }}
+          UPLOAD_OUTCOME: ${{ steps.upload.outcome }}
+        run: |
+          set -euo pipefail
+          conclusion=success
+          reason=SCORECARD_PASSED
+          if [[ "${CHECKOUT_OUTCOME}" != success ]]; then
+            conclusion=failure
+            reason=SOURCE_CHECKOUT_FAILED
+          elif [[ "${SCAN_OUTCOME}" != success ]]; then
+            conclusion=failure
+            reason=SCORECARD_SCAN_FAILED
+          elif [[ "${UPLOAD_OUTCOME}" != success ]]; then
+            conclusion=failure
+            reason=SCORECARD_UPLOAD_FAILED
+          fi
+          printf 'conclusion=%s\nreason_code=%s\n' "${conclusion}" "${reason}" >> "${GITHUB_OUTPUT}"
+      - id: reports
+        name: Select available Scorecard report
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -f scorecard-results.sarif ]]; then
+            printf 'paths=%s\n' "${GITHUB_WORKSPACE}/scorecard-results.sarif" >> "${GITHUB_OUTPUT}"
+          else
+            printf 'paths=\n' >> "${GITHUB_OUTPUT}"
+          fi
+      - id: evidence
+        name: Publish CI evidence
+        if: always()
+        continue-on-error: true
+        uses: $/.github/actions/publish-ci-evidence
+        with:
+          context-json: ${{ needs.prepare.outputs.context_json }}
+          producer: github_actions
+          conclusion: ${{ steps.result.outputs.conclusion }}
+          reason-code: ${{ steps.result.outputs.reason_code }}
+          plan-id: scorecard-protected-v1
+          build-id: ${{ github.run_id }}
+          report-paths: ${{ steps.reports.outputs.paths }}
+          artifact-name: scorecard-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Enforce result
+        if: always()
+        env:
+          CONCLUSION: ${{ steps.result.outputs.conclusion }}
+          EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+        run: |
+          set -euo pipefail
+          [[ "${CONCLUSION}" == success ]]
+          [[ "${EVIDENCE_OUTCOME}" == success ]]
+
+  finalize:
+    name: Mindclade / Scorecard Result
+    needs: [prepare, scorecard]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      correlation_id: ${{ needs.prepare.outputs.correlation_id }}
+      source_revision: ${{ needs.prepare.outputs.source_revision }}
+      caller_repository: ${{ needs.prepare.outputs.caller_repository }}
+      trust_classification: ${{ needs.prepare.outputs.trust_classification }}
+      execution_tier: ${{ needs.prepare.outputs.execution_tier }}
+      plan_id: scorecard-protected-v1
+      build_id: ${{ github.run_id }}
+      conclusion: ${{ steps.result.outputs.conclusion }}
+      reason_code: ${{ steps.result.outputs.reason_code }}
+      evidence_digest: ${{ needs.scorecard.outputs.evidence_digest || steps.rejection_evidence.outputs.evidence_digest }}
+      evidence_ref: ${{ needs.scorecard.outputs.evidence_ref || steps.rejection_evidence.outputs.evidence_ref }}
+    steps:
+      - id: result
+        name: Normalize final result
+        env:
+          CONTEXT_OUTCOME: ${{ needs.prepare.outputs.context_outcome }}
+          CONTEXT_REASON: ${{ needs.prepare.outputs.context_reason }}
+          PINS_OUTCOME: ${{ needs.prepare.outputs.pins_outcome }}
+          PINS_REASON: ${{ needs.prepare.outputs.pins_reason }}
+          PREPARE_RESULT: ${{ needs.prepare.result }}
+          SCORECARD_CONCLUSION: ${{ needs.scorecard.outputs.conclusion }}
+          SCORECARD_REASON: ${{ needs.scorecard.outputs.reason_code }}
+          SCORECARD_RESULT: ${{ needs.scorecard.result }}
+        run: |
+          set -euo pipefail
+          conclusion="${SCORECARD_CONCLUSION:-failure}"
+          reason="${SCORECARD_REASON:-SCORECARD_FAILED}"
+          if [[ "${PREPARE_RESULT}" != success ]]; then
+            if [[ "${CONTEXT_OUTCOME}" != success ]]; then
+              conclusion=action_required
+              reason="${CONTEXT_REASON:-PROTECTED_CONTEXT_REQUIRED}"
+            elif [[ "${PINS_OUTCOME}" != success ]]; then
+              conclusion=failure
+              reason="${PINS_REASON:-PIN_POLICY_FAILED}"
+            else
+              conclusion=failure
+              reason=SCORECARD_PREFLIGHT_FAILED
+            fi
+          elif [[ "${SCORECARD_RESULT}" == success ]]; then
+            conclusion=success
+            reason="${SCORECARD_REASON:-SCORECARD_PASSED}"
+          fi
+          printf 'conclusion=%s\nreason_code=%s\n' "${conclusion}" "${reason}" >> "${GITHUB_OUTPUT}"
+      - id: rejection_evidence
+        name: Publish rejected-context evidence
+        if: needs.prepare.result != 'success' && needs.prepare.outputs.context_json != ''
+        continue-on-error: true
+        uses: $/.github/actions/publish-ci-evidence
+        with:
+          context-json: ${{ needs.prepare.outputs.context_json }}
+          producer: github_actions
+          conclusion: ${{ steps.result.outputs.conclusion }}
+          reason-code: ${{ steps.result.outputs.reason_code }}
+          plan-id: scorecard-protected-v1
+          build-id: ${{ github.run_id }}
+          artifact-name: scorecard-rejection-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Enforce final result
+        env:
+          CONCLUSION: ${{ steps.result.outputs.conclusion }}
+        run: |
+          set -euo pipefail
+          [[ "${CONCLUSION}" == success ]]

@@ -1,0 +1,88 @@
+module(
+    name = "mindclade_github",
+    version = "0.1.0",
+    bazel_compatibility = [">=9.2.0", "<9.3.0"],
+)
+
+bazel_dep(name = "platforms", version = "1.1.0")
+bazel_dep(name = "rules_python", version = "2.3.2")
+
+# rules_python 2.3.2 maps the 3.13 minor line to CPython 3.13.13.
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.defaults(python_version = "3.13")
+python.toolchain(python_version = "3.13")
+use_repo(python, "python_3_13", "pythons_hub")
+register_toolchains("@pythons_hub//:all")
+
+# Keep third-party command-line validators hermetic. Each repository contains
+# exactly one executable (OPA) or an archive with an explicit BUILD export
+# (actionlint); platform selection happens in the root BUILD.bazel.
+http_file = use_repo_rule(
+    "@bazel_tools//tools/build_defs/repo:http.bzl",
+    "http_file",
+)
+
+http_file(
+    name = "opa_darwin_amd64",
+    urls = ["https://github.com/open-policy-agent/opa/releases/download/v1.20.1/opa_darwin_amd64"],
+    sha256 = "2e0ba7a7a45940ac4c7df878af269ebd86b221d4776f746a7fa0b6d85ba209d4",
+    downloaded_file_path = "opa",
+    executable = True,
+)
+
+http_file(
+    name = "opa_darwin_arm64",
+    urls = ["https://github.com/open-policy-agent/opa/releases/download/v1.20.1/opa_darwin_arm64"],
+    sha256 = "2b805d476099f81828e0a72466f23b7c5f7035e8e51823f5e1ef3cbf4f2321ce",
+    downloaded_file_path = "opa",
+    executable = True,
+)
+
+http_file(
+    name = "opa_linux_amd64",
+    urls = ["https://github.com/open-policy-agent/opa/releases/download/v1.20.1/opa_linux_amd64"],
+    sha256 = "4814caaf89062b9929e7373c745eb1b73be8aa347be61da06491f68fe910245b",
+    downloaded_file_path = "opa",
+    executable = True,
+)
+
+http_file(
+    name = "opa_linux_arm64",
+    urls = ["https://github.com/open-policy-agent/opa/releases/download/v1.20.1/opa_linux_arm64"],
+    sha256 = "07a36a8376fba1a7a44f703d4eb314c36d2f9aeb6df5d8bdb257063fdfcd5b5e",
+    downloaded_file_path = "opa",
+    executable = True,
+)
+
+http_archive = use_repo_rule(
+    "@bazel_tools//tools/build_defs/repo:http.bzl",
+    "http_archive",
+)
+
+http_archive(
+    name = "actionlint_darwin_amd64",
+    urls = ["https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_darwin_amd64.tar.gz"],
+    sha256 = "5b44c3bc2255115c9b69e30efc0fecdf498fdb63c5d58e17084fd5f16324c644",
+    build_file_content = "exports_files([\"actionlint\"])",
+)
+
+http_archive(
+    name = "actionlint_darwin_arm64",
+    urls = ["https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_darwin_arm64.tar.gz"],
+    sha256 = "aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f",
+    build_file_content = "exports_files([\"actionlint\"])",
+)
+
+http_archive(
+    name = "actionlint_linux_amd64",
+    urls = ["https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz"],
+    sha256 = "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8",
+    build_file_content = "exports_files([\"actionlint\"])",
+)
+
+http_archive(
+    name = "actionlint_linux_arm64",
+    urls = ["https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_arm64.tar.gz"],
+    sha256 = "325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6",
+    build_file_content = "exports_files([\"actionlint\"])",
+)
