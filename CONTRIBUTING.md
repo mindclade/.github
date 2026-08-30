@@ -1,5 +1,9 @@
 # Contributing
 
+Owner: @mindclade/developer-platform
+Last reviewed: 2026-08-30
+Review cadence: 365 days
+
 This is pre-production organization GitHub automation source. Contributions must preserve the repository's declared ownership, review, and activation boundaries.
 
 1. Open or reference an issue when the change affects a workflow, policy, template, schema, or governance contract.

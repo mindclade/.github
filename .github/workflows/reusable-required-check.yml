@@ -32,9 +32,32 @@ on:
         required: false
         default: 3600
         type: number
+      archive_evidence:
+        description: Archive successful protected evidence to the governed GCS bucket.
+        required: false
+        default: false
+        type: boolean
+      gcp_workload_identity_provider:
+        description: Exact projects/<number>/locations/global/workloadIdentityPools/github-ci-evidence/providers/writer resource name.
+        required: false
+        default: ""
+        type: string
+      gcp_service_account:
+        description: Dedicated ci-evidence-writer@<project>.iam.gserviceaccount.com identity.
+        required: false
+        default: ""
+        type: string
+      gcs_evidence_bucket:
+        description: Approved <project-id>-production-ci-evidence bucket name without a gs:// prefix.
+        required: false
+        default: ""
+        type: string
     secrets:
       buildkite_evidence_token:
         description: Read-only Buildkite token for build state and evidence artifacts.
+        required: false
+      buildkite_cancel_token:
+        description: Buildkite token restricted to reading and cancelling the exact bound build.
         required: false
       buildkite_pipeline:
         description: Buildkite pipeline slug selected by repository policy.
@@ -73,12 +96,46 @@ on:
       evidence_ref:
         description: Immutable verifier evidence artifact reference.
         value: ${{ jobs.required.outputs.evidence_ref }}
+      artifact_digest:
+        description: GitHub-reported digest of the immutable verifier artifact.
+        value: ${{ jobs.required.outputs.artifact_digest }}
+      archive_ref:
+        description: Generation-qualified GCS evidence reference when protected archival is enabled.
+        value: ${{ jobs.archive.outputs.archive_ref }}
+      archive_digest:
+        description: Canonical digest bound to the archived evidence object.
+        value: ${{ jobs.archive.outputs.archive_digest }}
+      archive_artifact_digest:
+        description: GitHub-reported artifact digest bound to the GCS archive handoff.
+        value: ${{ jobs.archive.outputs.archive_artifact_digest }}
+
+concurrency:
+  group: mindclade-org-required-check-${{ github.repository }}
+  cancel-in-progress: true
 
 permissions: {}
 
 jobs:
+  prepare:
+    name: Validate required-check trust boundary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      execution_tier: ${{ steps.context.outputs.execution_tier }}
+    steps:
+      - id: context
+        name: Validate caller context
+        uses: $/.github/actions/validate-trusted-context
+        with:
+          expected-source-revision: ${{ inputs.source_revision }}
+      - name: Verify immutable implementation closure
+        uses: $/.github/actions/verify-pinned-actions
+
   required:
     name: Mindclade / Required
+    needs: prepare
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     permissions:
@@ -95,6 +152,8 @@ jobs:
       reason_code: ${{ steps.result.outputs.reason_code }}
       evidence_digest: ${{ steps.evidence.outputs.evidence_digest }}
       evidence_ref: ${{ steps.evidence.outputs.evidence_ref }}
+      artifact_id: ${{ steps.evidence.outputs.artifact_id }}
+      artifact_digest: ${{ steps.evidence.outputs.artifact_digest }}
     steps:
       - id: context
         name: Validate caller context
@@ -115,6 +174,7 @@ jobs:
           BUILD_NUMBER: ${{ inputs.build_number }}
           BUILDKITE_PIPELINE: ${{ secrets.buildkite_pipeline }}
           BUILDKITE_TOKEN: ${{ secrets.buildkite_evidence_token }}
+          BUILDKITE_CANCEL_TOKEN: ${{ secrets.buildkite_cancel_token }}
           CONTEXT_DIGEST: ${{ inputs.context_digest }}
           CORRELATION_ID: ${{ inputs.correlation_id }}
           OBSERVED_CONTEXT_DIGEST: ${{ steps.context.outputs.context_digest }}
@@ -124,7 +184,7 @@ jobs:
           set -euo pipefail
           [[ "${BUILD_ID}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
           [[ "${BUILD_NUMBER}" =~ ^[1-9][0-9]*$ ]]
-          [[ -n "${BUILDKITE_TOKEN}" && -n "${BUILDKITE_PIPELINE}" ]]
+          [[ -n "${BUILDKITE_TOKEN}" && -n "${BUILDKITE_CANCEL_TOKEN}" && -n "${BUILDKITE_PIPELINE}" ]]
           [[ "${PIPELINE_DEFINITION_REVISION}" =~ ^[0-9a-f]{40}$ ]]
           [[ "${CONTEXT_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
           [[ "${CORRELATION_ID}" == "${OBSERVED_CORRELATION_ID}" ]]
@@ -157,6 +217,29 @@ jobs:
             --expected-correlation-id "${CORRELATION_ID}" \
             --expected-context-digest "${CONTEXT_DIGEST}" \
             --github-output "${GITHUB_OUTPUT}"
+      - id: cancel
+        name: Cancel the bound Buildkite build when verification is cancelled
+        if: cancelled() && steps.preflight.outcome == 'success'
+        continue-on-error: true
+        env:
+          BUILD_ID: ${{ inputs.build_id }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
+          BUILDKITE_API_TOKEN: ${{ secrets.buildkite_cancel_token }}
+          BUILDKITE_ORGANIZATION: ${{ github.repository_owner }}
+          BUILDKITE_PIPELINE: ${{ secrets.buildkite_pipeline }}
+          EXPECTED_SOURCE_REVISION: ${{ inputs.source_revision }}
+          IMPLEMENTATION_ROOT: ${{ steps.context.outputs.implementation_root }}
+        run: |
+          set -euo pipefail
+          [[ "${BUILD_ID}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
+          [[ "${BUILD_NUMBER}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${EXPECTED_SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          [[ -n "${BUILDKITE_API_TOKEN}" && -n "${BUILDKITE_PIPELINE}" ]]
+          python3 "${IMPLEMENTATION_ROOT}/tools/emit_ci_evidence.py" buildkite-cancel \
+            --pipeline "${BUILDKITE_PIPELINE}" \
+            --build-id "${BUILD_ID}" \
+            --build-number "${BUILD_NUMBER}" \
+            --expected-source-revision "${EXPECTED_SOURCE_REVISION}"
       - id: result
         name: Normalize required-check result
         if: always()
@@ -210,3 +293,109 @@ jobs:
           set -euo pipefail
           [[ "${CONCLUSION}" == success ]]
           [[ "${EVIDENCE_OUTCOME}" == success ]]
+
+  archive:
+    name: Archive protected CI evidence
+    needs: [prepare, required]
+    if: needs.prepare.outputs.execution_tier == 'trusted' || needs.prepare.outputs.execution_tier == 'release'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    outputs:
+      archive_ref: ${{ steps.archive.outputs.archive_ref }}
+      archive_digest: ${{ steps.archive.outputs.archive_digest }}
+      archive_artifact_digest: ${{ steps.archive.outputs.archive_artifact_digest }}
+    steps:
+      - name: Validate archive activation inputs
+        if: inputs.archive_evidence
+        env:
+          ARTIFACT_DIGEST: ${{ needs.required.outputs.artifact_digest }}
+          ARTIFACT_ID: ${{ needs.required.outputs.artifact_id }}
+          EVIDENCE_DIGEST: ${{ needs.required.outputs.evidence_digest }}
+          GCP_SERVICE_ACCOUNT: ${{ inputs.gcp_service_account }}
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ inputs.gcp_workload_identity_provider }}
+          GCS_EVIDENCE_BUCKET: ${{ inputs.gcs_evidence_bucket }}
+        run: |
+          set -euo pipefail
+          [[ "${ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${ARTIFACT_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${EVIDENCE_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "${GCP_WORKLOAD_IDENTITY_PROVIDER}" =~ ^projects/[1-9][0-9]*/locations/global/workloadIdentityPools/github-ci-evidence/providers/writer$ ]]
+          [[ "${GCP_SERVICE_ACCOUNT}" =~ ^ci-evidence-writer@[a-z][a-z0-9-]{4,28}[a-z0-9]\.iam\.gserviceaccount\.com$ ]]
+          [[ "${GCS_EVIDENCE_BUCKET}" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]-production-ci-evidence$ ]]
+      - name: Download the exact evidence artifact
+        if: inputs.archive_evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ needs.required.outputs.artifact_id }}
+          path: ${{ runner.temp }}/mindclade-required-evidence
+          merge-multiple: true
+      - id: archive-pins
+        name: Verify the immutable archive verifier
+        if: inputs.archive_evidence
+        uses: $/.github/actions/verify-pinned-actions
+      - name: Reverify every downloaded evidence byte before OIDC
+        if: inputs.archive_evidence
+        env:
+          ARTIFACT_DIGEST: ${{ needs.required.outputs.artifact_digest }}
+          EVIDENCE_DIGEST: ${{ needs.required.outputs.evidence_digest }}
+          EVIDENCE_DIRECTORY: ${{ runner.temp }}/mindclade-required-evidence
+          IMPLEMENTATION_ROOT: ${{ steps.archive-pins.outputs.implementation_root }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          set -euo pipefail
+          [[ "${ARTIFACT_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          python3 "${IMPLEMENTATION_ROOT}/tools/emit_ci_evidence.py" verify-artifact \
+            --artifact-directory "${EVIDENCE_DIRECTORY}" \
+            --expected-evidence-digest "${EVIDENCE_DIGEST}" \
+            --expected-source-revision "${SOURCE_REVISION}"
+      - id: auth
+        name: Exchange the protected GitHub identity
+        if: inputs.archive_evidence
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ inputs.gcp_workload_identity_provider }}
+          service_account: ${{ inputs.gcp_service_account }}
+          create_credentials_file: true
+          export_environment_variables: true
+          cleanup_credentials: true
+      - name: Install the reviewed Google Cloud CLI
+        if: inputs.archive_evidence
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+        with:
+          version: 568.0.0
+      - id: archive
+        name: Create the generation-bound archive
+        if: inputs.archive_evidence
+        env:
+          ARTIFACT_DIGEST: ${{ needs.required.outputs.artifact_digest }}
+          ARTIFACT_ID: ${{ needs.required.outputs.artifact_id }}
+          EVIDENCE_DIGEST: ${{ needs.required.outputs.evidence_digest }}
+          EVIDENCE_DIRECTORY: ${{ runner.temp }}/mindclade-required-evidence
+          GCS_EVIDENCE_BUCKET: ${{ inputs.gcs_evidence_bucket }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          set -euo pipefail
+          evidence_file="${EVIDENCE_DIRECTORY}/ci-evidence.json"
+          object_prefix="ci-evidence/v1/${GITHUB_REPOSITORY}/${SOURCE_REVISION}/${GITHUB_RUN_ID}/${GITHUB_RUN_ATTEMPT}/${ARTIFACT_ID}"
+          object_uri="gs://${GCS_EVIDENCE_BUCKET}/${object_prefix}/ci-evidence.json"
+          upload_output="$(gcloud storage cp \
+            --if-generation-match=0 \
+            --print-created-message \
+            "${evidence_file}" "${object_uri}" 2>&1)"
+          printf '%s\n' "${upload_output}" >&2
+          archive_ref="$(printf '%s\n' "${upload_output}" | sed -n 's/^Created: //p')"
+          [[ "${archive_ref%%#*}" == "${object_uri}" ]]
+          generation="${archive_ref##*#}"
+          [[ "${generation}" =~ ^[1-9][0-9]*$ ]]
+          if [[ -d "${EVIDENCE_DIRECTORY}/reports" ]]; then
+            gcloud storage cp \
+              --if-generation-match=0 \
+              --recursive "${EVIDENCE_DIRECTORY}/reports" \
+              "gs://${GCS_EVIDENCE_BUCKET}/${object_prefix}/"
+          fi
+          printf 'archive_ref=%s\narchive_digest=%s\narchive_artifact_digest=%s\n' \
+            "${archive_ref}" "${EVIDENCE_DIGEST}" "${ARTIFACT_DIGEST}" >> "${GITHUB_OUTPUT}"

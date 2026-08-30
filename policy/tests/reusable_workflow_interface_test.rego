@@ -50,6 +50,24 @@ test_derived_trust_input_is_denied if {
   violation.code == "DERIVED_TRUST_INPUT_FORBIDDEN"
 }
 
+test_casefolded_source_trust_input_is_denied if {
+  denials := data.mindclade.workflow.reusable_interface.denials with input as {
+    "workflow": {
+      "name": "reusable-metadata-validation",
+      "workflow_call": {
+        "inputs": {
+          "source_revision": {"required": true, "type": "string"},
+          "Source_Trust": {"required": false, "type": "string"}
+        },
+        "outputs": common_outputs,
+        "secrets": {}
+      }
+    }
+  }
+  some violation in denials
+  violation.code == "DERIVED_TRUST_INPUT_FORBIDDEN"
+}
+
 test_secrets_inherit_is_denied if {
   denials := data.mindclade.workflow.reusable_interface.denials with input as {
     "workflow": {
@@ -73,6 +91,50 @@ test_unapproved_non_buildkite_secret_is_denied if {
         "inputs": {"source_revision": {"required": true, "type": "string"}},
         "outputs": common_outputs,
         "secrets": {"buildkite_dispatch_token": {"required": true}}
+      }
+    }
+  }
+  some violation in denials
+  violation.code == "SECRETS_FORBIDDEN"
+}
+
+test_approved_buildkite_secret_requires_exact_workflow_path if {
+  data.mindclade.workflow.reusable_interface.allow with input as {
+    "workflow_path": ".github/workflows/reusable-required-check.yml",
+    "workflow": {
+      "name": "an-arbitrary-display-name",
+      "workflow_call": {
+        "inputs": {"source_revision": {"required": true, "type": "string"}},
+        "outputs": common_outputs,
+        "secrets": {"buildkite_evidence_token": {"required": true}}
+      }
+    }
+  }
+}
+
+test_bound_build_cancellation_secret_is_approved_for_required_check if {
+  data.mindclade.workflow.reusable_interface.allow with input as {
+    "workflow_path": ".github/workflows/reusable-required-check.yml",
+    "workflow": {
+      "name": "reusable-required-check",
+      "workflow_call": {
+        "inputs": {"source_revision": {"required": true, "type": "string"}},
+        "outputs": common_outputs,
+        "secrets": {"buildkite_cancel_token": {"required": false}}
+      }
+    }
+  }
+}
+
+test_buildkite_display_name_cannot_spoof_workflow_path if {
+  denials := data.mindclade.workflow.reusable_interface.denials with input as {
+    "workflow_path": ".github/workflows/reusable-documentation-check.yml",
+    "workflow": {
+      "name": "reusable-required-check",
+      "workflow_call": {
+        "inputs": {"source_revision": {"required": true, "type": "string"}},
+        "outputs": common_outputs,
+        "secrets": {"buildkite_evidence_token": {"required": true}}
       }
     }
   }

@@ -52,6 +52,10 @@ on:
         description: Immutable evidence artifact reference.
         value: ${{ jobs.finalize.outputs.evidence_ref }}
 
+concurrency:
+  group: mindclade-org-codeql-${{ github.repository }}
+  cancel-in-progress: true
+
 permissions: {}
 
 jobs:

@@ -1,7 +1,10 @@
 module(
     name = "mindclade_github",
     version = "0.1.0",
-    bazel_compatibility = [">=9.2.0", "<9.3.0"],
+    bazel_compatibility = [
+        ">=9.2.0",
+        "<9.3.0",
+    ],
 )
 
 bazel_dep(name = "platforms", version = "1.1.0")
@@ -12,11 +15,12 @@ python = use_extension("@rules_python//python/extensions:python.bzl", "python")
 python.defaults(python_version = "3.13")
 python.toolchain(python_version = "3.13")
 use_repo(python, "python_3_13", "pythons_hub")
+
 register_toolchains("@pythons_hub//:all")
 
 # Keep third-party command-line validators hermetic. Each repository contains
-# exactly one executable (OPA) or an archive with an explicit BUILD export
-# (actionlint); platform selection happens in the root BUILD.bazel.
+# exactly one executable or a checksum-pinned source closure; platform
+# selection happens in the root BUILD.bazel.
 http_file = use_repo_rule(
     "@bazel_tools//tools/build_defs/repo:http.bzl",
     "http_file",
@@ -24,34 +28,34 @@ http_file = use_repo_rule(
 
 http_file(
     name = "opa_darwin_amd64",
-    urls = ["https://github.com/open-policy-agent/opa/releases/download/v1.20.1/opa_darwin_amd64"],
-    sha256 = "2e0ba7a7a45940ac4c7df878af269ebd86b221d4776f746a7fa0b6d85ba209d4",
     downloaded_file_path = "opa",
     executable = True,
+    sha256 = "2e0ba7a7a45940ac4c7df878af269ebd86b221d4776f746a7fa0b6d85ba209d4",
+    urls = ["https://github.com/open-policy-agent/opa/releases/download/v1.20.1/opa_darwin_amd64"],
 )
 
 http_file(
     name = "opa_darwin_arm64",
-    urls = ["https://github.com/open-policy-agent/opa/releases/download/v1.20.1/opa_darwin_arm64"],
-    sha256 = "2b805d476099f81828e0a72466f23b7c5f7035e8e51823f5e1ef3cbf4f2321ce",
     downloaded_file_path = "opa",
     executable = True,
+    sha256 = "2b805d476099f81828e0a72466f23b7c5f7035e8e51823f5e1ef3cbf4f2321ce",
+    urls = ["https://github.com/open-policy-agent/opa/releases/download/v1.20.1/opa_darwin_arm64"],
 )
 
 http_file(
     name = "opa_linux_amd64",
-    urls = ["https://github.com/open-policy-agent/opa/releases/download/v1.20.1/opa_linux_amd64"],
-    sha256 = "4814caaf89062b9929e7373c745eb1b73be8aa347be61da06491f68fe910245b",
     downloaded_file_path = "opa",
     executable = True,
+    sha256 = "4814caaf89062b9929e7373c745eb1b73be8aa347be61da06491f68fe910245b",
+    urls = ["https://github.com/open-policy-agent/opa/releases/download/v1.20.1/opa_linux_amd64"],
 )
 
 http_file(
     name = "opa_linux_arm64",
-    urls = ["https://github.com/open-policy-agent/opa/releases/download/v1.20.1/opa_linux_arm64"],
-    sha256 = "07a36a8376fba1a7a44f703d4eb314c36d2f9aeb6df5d8bdb257063fdfcd5b5e",
     downloaded_file_path = "opa",
     executable = True,
+    sha256 = "07a36a8376fba1a7a44f703d4eb314c36d2f9aeb6df5d8bdb257063fdfcd5b5e",
+    urls = ["https://github.com/open-policy-agent/opa/releases/download/v1.20.1/opa_linux_arm64"],
 )
 
 http_archive = use_repo_rule(
@@ -61,28 +65,89 @@ http_archive = use_repo_rule(
 
 http_archive(
     name = "actionlint_darwin_amd64",
-    urls = ["https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_darwin_amd64.tar.gz"],
-    sha256 = "5b44c3bc2255115c9b69e30efc0fecdf498fdb63c5d58e17084fd5f16324c644",
     build_file_content = "exports_files([\"actionlint\"])",
+    sha256 = "5b44c3bc2255115c9b69e30efc0fecdf498fdb63c5d58e17084fd5f16324c644",
+    urls = ["https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_darwin_amd64.tar.gz"],
 )
 
 http_archive(
     name = "actionlint_darwin_arm64",
-    urls = ["https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_darwin_arm64.tar.gz"],
-    sha256 = "aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f",
     build_file_content = "exports_files([\"actionlint\"])",
+    sha256 = "aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f",
+    urls = ["https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_darwin_arm64.tar.gz"],
 )
 
 http_archive(
     name = "actionlint_linux_amd64",
-    urls = ["https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz"],
-    sha256 = "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8",
     build_file_content = "exports_files([\"actionlint\"])",
+    sha256 = "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8",
+    urls = ["https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz"],
 )
 
 http_archive(
     name = "actionlint_linux_arm64",
-    urls = ["https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_arm64.tar.gz"],
-    sha256 = "325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6",
     build_file_content = "exports_files([\"actionlint\"])",
+    sha256 = "325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6",
+    urls = ["https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_arm64.tar.gz"],
+)
+
+# yamllint is a pure-Python build tool. Its complete runtime closure is fetched
+# from immutable PyPI release artifacts and exposed through generated external
+# BUILD files, so no repository-local dependency or lock path is required.
+http_archive(
+    name = "mindclade_pyyaml",
+    build_file_content = """
+load("@rules_python//python:defs.bzl", "py_library")
+
+py_library(
+    name = "pyyaml",
+    srcs = glob(["lib/yaml/**/*.py"]),
+    imports = ["lib"],
+    visibility = ["//visibility:public"],
+)
+""",
+    sha256 = "d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f",
+    strip_prefix = "pyyaml-6.0.3",
+    urls = ["https://files.pythonhosted.org/packages/05/8e/961c0007c59b8dd7729d542c61a4d537767a59645b82a0b521206e1e25c2/pyyaml-6.0.3.tar.gz"],
+)
+
+http_archive(
+    name = "mindclade_pathspec",
+    build_file_content = """
+load("@rules_python//python:defs.bzl", "py_library")
+
+py_library(
+    name = "pathspec",
+    srcs = glob(["pathspec/**/*.py"]),
+    imports = ["."],
+    visibility = ["//visibility:public"],
+)
+""",
+    sha256 = "a482d51503a1ab33b1c67a6c3813a26953dbdc71c31dacaef9a838c4e29f5712",
+    strip_prefix = "pathspec-0.12.1",
+    urls = ["https://files.pythonhosted.org/packages/ca/bc/f35b8446f4531a7cb215605d100cd88b7ac6f44ab3fc94870c120ab3adbf/pathspec-0.12.1.tar.gz"],
+)
+
+http_archive(
+    name = "mindclade_yamllint",
+    build_file_content = """
+load("@rules_python//python:defs.bzl", "py_binary")
+
+py_binary(
+    name = "yamllint_cli",
+    srcs = glob(["yamllint/**/*.py"]),
+    main = "yamllint/__main__.py",
+    data = glob(["yamllint/conf/*"]),
+    imports = ["."],
+    deps = [
+        "@mindclade_pathspec//:pathspec",
+        "@mindclade_pyyaml//:pyyaml",
+    ],
+    legacy_create_init = 0,
+    visibility = ["//visibility:public"],
+)
+""",
+    sha256 = "81f7c0c5559becc8049470d86046b36e96113637bcbe4753ecef06977c00245d",
+    strip_prefix = "yamllint-1.37.1",
+    urls = ["https://files.pythonhosted.org/packages/46/f2/cd8b7584a48ee83f0bc94f8a32fea38734cefcdc6f7324c4d3bfc699457b/yamllint-1.37.1.tar.gz"],
 )

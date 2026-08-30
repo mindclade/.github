@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
+import urllib.parse
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -18,13 +21,35 @@ SHA = re.compile(r"^[0-9a-f]{40}$")
 IMPLEMENTATION_ACTION = re.compile(
     r"^\$/\.github/actions/[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
 )
+SELF_TEST_LOCAL_ACTION = re.compile(
+    r"^\./\.github/actions/[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
+)
+SELF_TEST_WORKFLOW_PATH = ".github/workflows/self-test.yml"
+REQUIRED_CHECK_WORKFLOW_PATH = ".github/workflows/reusable-required-check.yml"
+BUILDKITE_BRIDGE_TEMPLATE_PATH = "workflow-templates/buildkite-bridge.yml"
+ARCHIVE_HANDOFF_ASSERTIONS = (
+    '[[ "${ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]]',
+    '[[ "${ARTIFACT_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]',
+    '[[ "${EVIDENCE_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]',
+    '[[ "${GCP_WORKLOAD_IDENTITY_PROVIDER}" =~ ^projects/[1-9][0-9]*/locations/global/workloadIdentityPools/github-ci-evidence/providers/writer$ ]]',
+    '[[ "${GCP_SERVICE_ACCOUNT}" =~ ^ci-evidence-writer@[a-z][a-z0-9-]{4,28}[a-z0-9]\\.iam\\.gserviceaccount\\.com$ ]]',
+    '[[ "${GCS_EVIDENCE_BUCKET}" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]-production-ci-evidence$ ]]',
+)
 INTERNAL_IMMUTABLE_REFERENCE = re.compile(
     r"^mindclade/\.github/\.github/(?:actions|workflows)/[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$",
     re.IGNORECASE,
 )
 MAX_CANONICAL_YAML_BYTES = 1024 * 1024
 MAX_CANONICAL_YAML_DEPTH = 64
-APPROVED_SCORECARD_WORKFLOW_SHA256 = "b8d27eae6f5a60c2aaaadb2cfb4d0c411fd512e20995eaecb63f40f093319a18"
+DOCUMENTATION_REQUIRED_HEADINGS = {
+    "README.md": frozenset({"Ownership", "Activation boundary"}),
+    "CONTRIBUTING.md": frozenset({"Activation"}),
+    "GOVERNANCE.md": frozenset({"Ownership", "Change control", "Connected activation"}),
+    "SECURITY.md": frozenset({"Reporting", "Review and disclosure", "Activation boundary"}),
+    "SUPPORT.md": frozenset({"Source support", "Security support", "Connected requests"}),
+    "profile/README.md": frozenset({"Activation boundary"}),
+}
+APPROVED_SCORECARD_WORKFLOW_SHA256 = "298a89950a4cac5a890eb5b70242ae8c59dbed14bc276621cffb12e6b0156f04"
 COMMON_WORKFLOW_OUTPUTS = (
     "correlation_id",
     "source_revision",
@@ -46,11 +71,13 @@ DERIVED_TRUST_INPUTS = frozenset({
     "fork",
     "ref_protected",
 })
-BUILDKITE_WORKFLOWS = frozenset({
-    "reusable-buildkite-dispatch.yml",
-    "reusable-required-check.yml",
+ALLOWED_INPUT_TYPES = frozenset({"string", "boolean", "number"})
+BUILDKITE_WORKFLOW_PATHS = frozenset({
+    ".github/workflows/reusable-buildkite-dispatch.yml",
+    ".github/workflows/reusable-required-check.yml",
 })
 BUILDKITE_SECRETS = frozenset({
+    "buildkite_cancel_token",
     "buildkite_dispatch_token",
     "buildkite_evidence_token",
     "buildkite_pipeline",
@@ -59,22 +86,30 @@ ALLOWED_PERMISSIONS = {
     "actions": "read",
     "checks": "write",
     "contents": "read",
+    "id-token": "write",
     "pull-requests": "read",
     "security-events": "write",
 }
+PROTECTED_TIER_GUARDS = frozenset({
+    "needs.prepare.outputs.execution_tier == 'trusted' || needs.prepare.outputs.execution_tier == 'release'",
+    "needs.prepare.outputs.execution_tier == 'release' || needs.prepare.outputs.execution_tier == 'trusted'",
+    "needs.prepare.result == 'success' && (needs.prepare.outputs.execution_tier == 'trusted' || needs.prepare.outputs.execution_tier == 'release')",
+    "needs.prepare.result == 'success' && (needs.prepare.outputs.execution_tier == 'release' || needs.prepare.outputs.execution_tier == 'trusted')",
+})
 APPROVED_EXTERNAL_REFERENCES = {
     "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",
     "github/codeql-action/init": "cdf488f595d80d6e07e03d4674febd5ab45fa938",
     "github/codeql-action/analyze": "cdf488f595d80d6e07e03d4674febd5ab45fa938",
     "github/codeql-action/upload-sarif": "cdf488f595d80d6e07e03d4674febd5ab45fa938",
     "actions/dependency-review-action": "a1d282b36b6f3519aa1f3fc636f609c47dddb294",
+    "actions/download-artifact": "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
     "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+    "google-github-actions/auth": "7c6bc770dae815cd3e89ee6cdf493a5fab2cc093",  # gitleaks:allow -- immutable public action commit
+    "google-github-actions/setup-gcloud": "aa5489c8933f4cc7a4f7d45035b3b1440c9c10db",
     "ghcr.io/ossf/scorecard-action": "sha256:ae5104dd3cc28466ebeb11144354be4cac4b7ff829654f9fab89021d71c46670",
     "docker://ghcr.io/ossf/scorecard-action": "sha256:ae5104dd3cc28466ebeb11144354be4cac4b7ff829654f9fab89021d71c46670",
 }
 
-# This list intentionally does not read BLUEPRINT.md: the Blueprint is an
-# architecture source, not a run-time dependency of policy validation.
 EXPECTED_INVENTORY = frozenset(
     {
         ".github/actions/validate-trusted-context/action.yml",
@@ -135,7 +170,6 @@ EXPECTED_INVENTORY = frozenset(
         "SUPPORT.md",
     }
 )
-OUT_OF_BAND_INVENTORY = frozenset({"BLUEPRINT.md"})
 IGNORED_INVENTORY_PARTS = frozenset({
     ".git",
     ".mypy_cache",
@@ -578,8 +612,21 @@ def inventory_files(root: Path) -> dict[str, Path]:
     return observed
 
 
-def source_closure_digest(root: Path) -> str:
+def source_closure_digest(root: Path, selected_paths: Iterable[str] | None = None) -> str:
     closure: dict[str, str] = {}
+    if selected_paths is not None:
+        resolved_root = root.resolve()
+        for relative in sorted(set(selected_paths)):
+            candidate, path_error = _repository_path(resolved_root, relative)
+            if path_error or candidate is None:
+                closure[relative] = "INVALID"
+            elif candidate.is_symlink():
+                closure[relative] = "SYMLINK"
+            elif candidate.is_file():
+                closure[relative] = hashlib.sha256(candidate.read_bytes()).hexdigest()
+            else:
+                closure[relative] = "MISSING"
+        return digest(closure)
     observed = inventory_files(root)
     for relative in sorted(EXPECTED_INVENTORY):
         path = root / relative
@@ -589,7 +636,7 @@ def source_closure_digest(root: Path) -> str:
             closure[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
         else:
             closure[relative] = "MISSING"
-    for relative in sorted(set(observed).difference(EXPECTED_INVENTORY, OUT_OF_BAND_INVENTORY)):
+    for relative in sorted(set(observed).difference(EXPECTED_INVENTORY)):
         path = observed[relative]
         closure[f"UNEXPECTED:{relative}"] = (
             "SYMLINK" if path.is_symlink() else hashlib.sha256(path.read_bytes()).hexdigest()
@@ -604,7 +651,7 @@ def validate_inventory(root: Path) -> dict[str, Any]:
         for path in EXPECTED_INVENTORY
         if not (root / path).is_file() or (root / path).is_symlink()
     )
-    unexpected = sorted(set(observed).difference(EXPECTED_INVENTORY, OUT_OF_BAND_INVENTORY))
+    unexpected = sorted(set(observed).difference(EXPECTED_INVENTORY))
     errors = [*missing, *(f"unexpected: {path}" for path in unexpected)]
     return result(
         not errors,
@@ -675,8 +722,12 @@ def _pin_reference_error(relative: Path, reference: Any) -> str | None:
     if not isinstance(reference, str) or not reference:
         return f"{relative}: uses reference must be a non-empty string"
     if reference.startswith("./"):
+        if relative.as_posix() == SELF_TEST_WORKFLOW_PATH and SELF_TEST_LOCAL_ACTION.fullmatch(reference):
+            return None
         return f"{relative}: caller-checkout local action reference is forbidden: {reference}"
     if reference.startswith("$/"):
+        if relative.as_posix() == SELF_TEST_WORKFLOW_PATH:
+            return f"{relative}: repository self-test must use an exact ./.github/actions/ local action reference: {reference}"
         if IMPLEMENTATION_ACTION.fullmatch(reference) and ".." not in reference.split("/"):
             return None
         return f"{relative}: invalid implementation action reference {reference}"
@@ -736,6 +787,61 @@ def validate_pins(root: Path) -> dict[str, Any]:
     return result(not errors, errors, check="pins")
 
 
+def _git_object_exists(root: Path, object_name: str) -> bool:
+    completed = subprocess.run(
+        ["git", "cat-file", "-e", object_name],
+        cwd=root,
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return completed.returncode == 0
+
+
+def validate_template_pins(root: Path, approved_main_revision: str) -> dict[str, Any]:
+    """Prove internal template pins exist on approved main and contain their targets."""
+    errors: list[str] = []
+    if not SHA.fullmatch(approved_main_revision):
+        return result(False, ["approved main revision must be a lowercase 40-character Git SHA"], check="template_pins")
+    if not _git_object_exists(root, f"{approved_main_revision}^{{commit}}"):
+        return result(False, [f"approved main revision does not exist: {approved_main_revision}"], check="template_pins")
+    internal_references: set[tuple[str, str, str]] = set()
+    for path in files(root, ("workflow-templates/*.yml", "workflow-templates/*.yaml")):
+        relative = path.relative_to(root)
+        document, parse_error = _parsed_yaml(path, root)
+        if parse_error:
+            errors.append(parse_error)
+            continue
+        for _, key, value in _walk_yaml(document):
+            if key != "uses" or not isinstance(value, str) or "@" not in value:
+                continue
+            source, revision = value.rsplit("@", 1)
+            if not INTERNAL_IMMUTABLE_REFERENCE.fullmatch(source):
+                continue
+            repository_path = source.removeprefix("mindclade/.github/")
+            internal_references.add((relative.as_posix(), repository_path, revision))
+    for template, repository_path, revision in sorted(internal_references):
+        if not SHA.fullmatch(revision):
+            errors.append(f"{template}: internal template reference is not SHA pinned")
+            continue
+        if not _git_object_exists(root, f"{revision}^{{commit}}"):
+            errors.append(f"{template}: pinned commit does not exist: {revision}")
+            continue
+        ancestor = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", revision, approved_main_revision],
+            cwd=root,
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if ancestor.returncode != 0:
+            errors.append(f"{template}: pinned commit is not on approved main: {revision}")
+            continue
+        if not _git_object_exists(root, f"{revision}:{repository_path}"):
+            errors.append(f"{template}: pinned commit does not contain {repository_path}")
+    return result(not errors, errors, check="template_pins", approved_main_revision=approved_main_revision)
+
+
 def _permission_violations(relative: Path, scope: str, untrusted: bool, protected: bool, value: Any) -> list[str]:
     prefix = f"{relative}:{scope}"
     if isinstance(value, str) and value in {"read-all", "write-all"}:
@@ -744,8 +850,6 @@ def _permission_violations(relative: Path, scope: str, untrusted: bool, protecte
         return [f"{prefix}: permissions must be an explicit object"]
     errors: list[str] = []
     for permission, level in value.items():
-        if permission == "id-token":
-            errors.append(f"{prefix}: id-token permission is forbidden")
         expected = ALLOWED_PERMISSIONS.get(permission)
         if expected is None:
             errors.append(f"{prefix}: unapproved permission scope {permission}")
@@ -760,14 +864,7 @@ def _permission_violations(relative: Path, scope: str, untrusted: bool, protecte
 
 
 def _has_protected_tier_guard(condition: str) -> bool:
-    tier = r"needs\.prepare\.outputs\.execution_tier"
-    trusted = rf"{tier}\s*==\s*(?:'trusted'|\"trusted\")"
-    release = rf"{tier}\s*==\s*(?:'release'|\"release\")"
-    pair = rf"(?:{trusted}\s*\|\|\s*{release}|{release}\s*\|\|\s*{trusted})"
-    approved = re.compile(
-        rf"^(?:{pair}|needs\.prepare\.result\s*==\s*(?:'success'|\"success\")\s*&&\s*\(\s*{pair}\s*\))$"
-    )
-    return approved.fullmatch(condition.strip()) is not None
+    return condition in PROTECTED_TIER_GUARDS
 
 
 def _has_trusted_context_producer(document: Any, jobs: Any) -> bool:
@@ -885,6 +982,7 @@ def _workflow_call_interface_errors(path: Path, document: dict[str, Any], relati
     input_names_by_casefold: dict[str, str] = {}
     derived_names = {name.casefold() for name in DERIVED_TRUST_INPUTS}
     for name in sorted(inputs):
+        definition = inputs[name]
         folded = name.casefold()
         if folded in derived_names:
             errors.append(f"{relative}: workflow_call input {name} is derived and forbidden")
@@ -893,6 +991,10 @@ def _workflow_call_interface_errors(path: Path, document: dict[str, Any], relati
             errors.append(f"{relative}: workflow_call inputs {previous} and {name} differ only by case")
         else:
             input_names_by_casefold[folded] = name
+        if not isinstance(definition, dict):
+            errors.append(f"{relative}: workflow_call input {name} definition must be a mapping")
+        elif definition.get("type") not in ALLOWED_INPUT_TYPES:
+            errors.append(f"{relative}: workflow_call input {name} must declare string, boolean, or number type")
 
     outputs = call.get("outputs")
     if not isinstance(outputs, dict):
@@ -913,12 +1015,284 @@ def _workflow_call_interface_errors(path: Path, document: dict[str, Any], relati
         if not isinstance(secrets, dict):
             errors.append(f"{relative}: workflow_call secrets must be an explicit object")
             secrets = {}
-        if path.name not in BUILDKITE_WORKFLOWS:
+        if relative.as_posix() not in BUILDKITE_WORKFLOW_PATHS:
             for name in sorted(secrets):
                 errors.append(f"{relative}: non-Buildkite reusable workflow may not declare secret {name}")
         else:
-            for name in sorted(set(secrets).difference(BUILDKITE_SECRETS)):
-                errors.append(f"{relative}: Buildkite reusable workflow declares unapproved secret {name}")
+            for name in sorted(secrets):
+                if name.casefold() not in BUILDKITE_SECRETS:
+                    errors.append(f"{relative}: Buildkite reusable workflow declares unapproved secret {name}")
+                if not isinstance(secrets[name], dict):
+                    errors.append(f"{relative}: workflow_call secret {name} definition must be a mapping")
+    return errors
+
+
+def _required_check_archive_errors(document: dict[str, Any], relative: Path) -> list[str]:
+    if relative.as_posix() != REQUIRED_CHECK_WORKFLOW_PATH:
+        return []
+    prefix = f"{relative}: archive activation"
+    jobs = document.get("jobs")
+    triggers = document.get("on")
+    workflow_call = triggers.get("workflow_call") if isinstance(triggers, dict) else None
+    inputs = workflow_call.get("inputs") if isinstance(workflow_call, dict) else None
+    archive_declared = isinstance(jobs, dict) and "archive" in jobs
+    archive_input_declared = isinstance(inputs, dict) and "archive_evidence" in inputs
+    if not archive_declared and not archive_input_declared:
+        return []
+    archive = jobs.get("archive") if isinstance(jobs, dict) else None
+    steps = archive.get("steps") if isinstance(archive, dict) else None
+    if not isinstance(steps, list):
+        return [f"{prefix} job must declare ordered steps"]
+
+    validation_steps = [
+        (index, step)
+        for index, step in enumerate(steps)
+        if isinstance(step, dict) and step.get("name") == "Validate archive activation inputs"
+    ]
+    auth_steps = [
+        (index, step)
+        for index, step in enumerate(steps)
+        if isinstance(step, dict)
+        and isinstance(step.get("uses"), str)
+        and step["uses"].startswith("google-github-actions/auth@")
+    ]
+    errors: list[str] = []
+    if len(validation_steps) != 1:
+        errors.append(f"{prefix} must have exactly one handoff validation step")
+    if len(auth_steps) != 1:
+        errors.append(f"{prefix} must have exactly one Google OIDC exchange step")
+    if len(validation_steps) != 1 or len(auth_steps) != 1:
+        return errors
+
+    validation_index, validation = validation_steps[0]
+    auth_index, auth = auth_steps[0]
+    if validation_index >= auth_index:
+        errors.append(f"{prefix} must validate every handoff value before OIDC exchange")
+    if validation.get("if") != "inputs.archive_evidence":
+        errors.append(f"{prefix} validation must use the exact archive activation guard")
+    if validation.get("continue-on-error", False) is not False:
+        errors.append(f"{prefix} validation must fail closed before OIDC exchange")
+    expected_env = {
+        "ARTIFACT_DIGEST": "${{ needs.required.outputs.artifact_digest }}",
+        "ARTIFACT_ID": "${{ needs.required.outputs.artifact_id }}",
+        "EVIDENCE_DIGEST": "${{ needs.required.outputs.evidence_digest }}",
+        "GCP_SERVICE_ACCOUNT": "${{ inputs.gcp_service_account }}",
+        "GCP_WORKLOAD_IDENTITY_PROVIDER": "${{ inputs.gcp_workload_identity_provider }}",
+        "GCS_EVIDENCE_BUCKET": "${{ inputs.gcs_evidence_bucket }}",
+    }
+    if validation.get("env") != expected_env:
+        errors.append(f"{prefix} validation environment must bind the exact caller handoff inputs")
+    run = validation.get("run")
+    run_lines = {line.strip() for line in run.splitlines()} if isinstance(run, str) else set()
+    for assertion in ARCHIVE_HANDOFF_ASSERTIONS:
+        if assertion not in run_lines:
+            errors.append(f"{prefix} is missing exact-shape assertion: {assertion}")
+
+    if auth.get("if") != "inputs.archive_evidence":
+        errors.append(f"{prefix} OIDC exchange must use the exact archive activation guard")
+    auth_inputs = auth.get("with")
+    expected_auth_inputs = {
+        "workload_identity_provider": "${{ inputs.gcp_workload_identity_provider }}",
+        "service_account": "${{ inputs.gcp_service_account }}",
+        "create_credentials_file": True,
+        "export_environment_variables": True,
+        "cleanup_credentials": True,
+    }
+    if auth_inputs != expected_auth_inputs:
+        errors.append(f"{prefix} OIDC exchange must consume only the validated writer identity inputs")
+    return errors
+
+
+def _bounded_concurrency_errors(document: dict[str, Any], relative: Path) -> list[str]:
+    if not relative.as_posix().startswith(".github/workflows/"):
+        return []
+    # Incomplete unit-test documents without jobs are validated by their
+    # focused interface checks. Every executable repository workflow has jobs
+    # and must carry a stable repository-scoped cancellation boundary. Reusable
+    # groups deliberately omit the source revision: a revision-scoped group
+    # would create one independent lane per push and would not bound superseded
+    # work. The repository self-test uses the stable pull-request/ref identity.
+    if not isinstance(document.get("jobs"), dict):
+        return []
+    concurrency = document.get("concurrency")
+    if not isinstance(concurrency, dict):
+        return [f"{relative}: executable workflow must declare bounded concurrency"]
+    errors: list[str] = []
+    group = concurrency.get("group")
+    if not isinstance(group, str) or "${{ github.repository }}" not in group:
+        errors.append(f"{relative}: concurrency group must include github.repository")
+    if relative.name.startswith("reusable-"):
+        if isinstance(group, str) and "${{ inputs.source_revision }}" in group:
+            errors.append(f"{relative}: reusable concurrency group must not create a lane per source revision")
+    elif not isinstance(group, str) or "${{ github.event.pull_request.number || github.ref }}" not in group:
+        errors.append(f"{relative}: repository workflow concurrency group must include its stable pull-request/ref boundary")
+    if concurrency.get("cancel-in-progress") is not True:
+        errors.append(f"{relative}: concurrency must cancel superseded in-progress runs")
+    return errors
+
+
+def _buildkite_bridge_errors(document: dict[str, Any], relative: Path) -> list[str]:
+    if relative.as_posix() != BUILDKITE_BRIDGE_TEMPLATE_PATH:
+        return []
+    prefix = f"{relative}: Buildkite bridge"
+    errors: list[str] = []
+    triggers = document.get("on")
+    if not isinstance(triggers, dict):
+        return [f"{prefix} triggers must be an explicit mapping"]
+    required_triggers = {"pull_request", "merge_group", "push", "release"}
+    if set(triggers) != required_triggers:
+        errors.append(f"{prefix} must declare exactly pull_request, merge_group, push, and release triggers")
+    if "pull_request_target" in triggers:
+        errors.append(f"{prefix} must never use pull_request_target")
+    if triggers.get("pull_request") is not None or triggers.get("merge_group") is not None:
+        errors.append(f"{prefix} pull_request and merge_group triggers must not carry mutable filters")
+    if triggers.get("push") != {"branches": ["main"]} or triggers.get("release") != {"types": ["published"]}:
+        errors.append(f"{prefix} protected triggers must be exactly main pushes and published releases")
+    if document.get("permissions") != {"contents": "read"}:
+        errors.append(f"{prefix} must declare only contents: read at workflow scope")
+    concurrency = document.get("concurrency")
+    if not isinstance(concurrency, dict):
+        errors.append(f"{prefix} must bound repository/ref concurrency")
+    else:
+        group = concurrency.get("group")
+        if not isinstance(group, str) or "${{ github.repository }}" not in group or "${{ github.event.pull_request.number || github.ref }}" not in group:
+            errors.append(f"{prefix} concurrency must bind repository and stable pull-request/ref identity")
+        if concurrency.get("cancel-in-progress") is not True:
+            errors.append(f"{prefix} must cancel superseded runs")
+
+    jobs = document.get("jobs")
+    if not isinstance(jobs, dict):
+        return [*errors, f"{prefix} jobs must be an explicit mapping"]
+    required_jobs = {"classify", "fork_checks", "dispatch", "buildkite_required", "required"}
+    if set(jobs) != required_jobs:
+        errors.append(f"{prefix} must declare exactly {', '.join(sorted(required_jobs))}")
+        return errors
+    classify = jobs["classify"]
+    fork_checks = jobs["fork_checks"]
+    dispatch = jobs["dispatch"]
+    buildkite_required = jobs["buildkite_required"]
+    gate = jobs["required"]
+    if not all(isinstance(job, dict) for job in (classify, fork_checks, dispatch, buildkite_required, gate)):
+        return [*errors, f"{prefix} every job must be a mapping"]
+
+    source_expression = "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}"
+    base_expression = "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}"
+    classify_inputs = classify.get("with")
+    if classify_inputs != {"source_revision": source_expression}:
+        errors.append(f"{prefix} classifier must receive the exact observed PR/merge/source revision")
+    if not isinstance(classify.get("uses"), str) or "reusable-metadata-validation.yml@" not in classify["uses"]:
+        errors.append(f"{prefix} classifier must use the pinned metadata workflow")
+    if "secrets" in classify:
+        errors.append(f"{prefix} classifier must be secretless")
+
+    fork_condition = fork_checks.get("if")
+    expected_fork_condition = (
+        "needs.classify.result == 'success' && github.event_name == 'pull_request' && "
+        "needs.classify.outputs.trust_classification == 'untrusted'"
+    )
+    if not isinstance(fork_condition, str) or " ".join(fork_condition.split()) != expected_fork_condition:
+        errors.append(f"{prefix} fork checks must be guarded by successful untrusted-PR classification")
+    if fork_checks.get("needs") != "classify" or "secrets" in fork_checks:
+        errors.append(f"{prefix} fork checks must depend only on classification and receive no secrets")
+    if not isinstance(fork_checks.get("uses"), str) or "reusable-documentation-check.yml@" not in fork_checks["uses"]:
+        errors.append(f"{prefix} fork checks must use the pinned secretless documentation workflow")
+    if fork_checks.get("with") != {"source_revision": "${{ github.event.pull_request.head.sha }}"}:
+        errors.append(f"{prefix} fork checks must receive only the observed pull-request head revision")
+
+    dispatch_condition = dispatch.get("if")
+    expected_dispatch_condition = (
+        "needs.classify.result == 'success' && ( github.event_name != 'pull_request' || "
+        "needs.classify.outputs.trust_classification == 'trusted' )"
+    )
+    if not isinstance(dispatch_condition, str) or " ".join(dispatch_condition.split()) != expected_dispatch_condition:
+        errors.append(f"{prefix} dispatch must skip every pull request not classified trusted")
+    if dispatch.get("needs") != "classify" or not isinstance(dispatch.get("uses"), str) or "reusable-buildkite-dispatch.yml@" not in dispatch["uses"]:
+        errors.append(f"{prefix} dispatch must depend on classification and use the pinned Buildkite dispatcher")
+    dispatch_inputs = dispatch.get("with")
+    expected_pipeline_class = "${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'presubmit' || github.event_name == 'release' && 'release' || 'protected' }}"
+    if dispatch_inputs != {
+        "source_revision": source_expression,
+        "pipeline_definition_revision": base_expression,
+        "pipeline_class": expected_pipeline_class,
+    }:
+        errors.append(f"{prefix} dispatch must bind exact source and protected base pipeline revisions")
+    dispatch_secrets = dispatch.get("secrets")
+    if dispatch_secrets != {
+        "buildkite_dispatch_token": "${{ secrets.MINDCLADE_BUILDKITE_DISPATCH_TOKEN }}",
+        "buildkite_pipeline": "${{ secrets.MINDCLADE_BUILDKITE_PIPELINE }}",
+    }:
+        errors.append(f"{prefix} dispatch must receive only its two explicitly mapped Buildkite secrets")
+
+    if buildkite_required.get("needs") != ["classify", "dispatch"] or buildkite_required.get("if") != "needs.dispatch.result == 'success'":
+        errors.append(f"{prefix} Buildkite verifier must run only after successful classified dispatch")
+    if not isinstance(buildkite_required.get("uses"), str) or "reusable-required-check.yml@" not in buildkite_required["uses"]:
+        errors.append(f"{prefix} Buildkite verifier must use the pinned required-check workflow")
+    required_inputs = buildkite_required.get("with")
+    expected_required_inputs = {
+        "source_revision": source_expression,
+        "pipeline_definition_revision": "${{ needs.dispatch.outputs.pipeline_definition_revision }}",
+        "build_id": "${{ needs.dispatch.outputs.build_id }}",
+        "build_number": "${{ needs.dispatch.outputs.build_number }}",
+        "correlation_id": "${{ needs.dispatch.outputs.correlation_id }}",
+        "context_digest": "${{ needs.dispatch.outputs.context_digest }}",
+    }
+    if required_inputs != expected_required_inputs:
+        errors.append(f"{prefix} Buildkite verifier must bind only the exact dispatch outputs")
+    required_secrets = buildkite_required.get("secrets")
+    if required_secrets != {
+        "buildkite_cancel_token": "${{ secrets.MINDCLADE_BUILDKITE_CANCEL_TOKEN }}",
+        "buildkite_evidence_token": "${{ secrets.MINDCLADE_BUILDKITE_EVIDENCE_TOKEN }}",
+        "buildkite_pipeline": "${{ secrets.MINDCLADE_BUILDKITE_PIPELINE }}",
+    }:
+        errors.append(f"{prefix} verifier must receive only its explicitly mapped Buildkite secrets")
+
+    if gate.get("name") != "Mindclade / Required" or gate.get("if") != "always()" or gate.get("permissions") != {}:
+        errors.append(f"{prefix} final gate must be the always-running permissionless Mindclade / Required context")
+    gate_env = gate.get("env")
+    expected_gate_env = {
+        "BUILDKITE_REQUIRED_RESULT": "${{ needs.buildkite_required.result }}",
+        "CLASSIFY_RESULT": "${{ needs.classify.result }}",
+        "DISPATCH_RESULT": "${{ needs.dispatch.result }}",
+        "EVENT_NAME": "${{ github.event_name }}",
+        "FORK_CHECKS_RESULT": "${{ needs.fork_checks.result }}",
+        "TRUST_CLASSIFICATION": "${{ needs.classify.outputs.trust_classification }}",
+    }
+    if gate_env != expected_gate_env:
+        errors.append(f"{prefix} final gate must consume only the exact job-result and trust outputs")
+    expected_gate_needs = ["classify", "fork_checks", "dispatch", "buildkite_required"]
+    if gate.get("needs") != expected_gate_needs or gate.get("runs-on") != "ubuntu-24.04" or gate.get("timeout-minutes") != 5:
+        errors.append(f"{prefix} final gate must use the exact bounded dependency closure")
+    expected_gate_script = """set -euo pipefail
+[[ "${CLASSIFY_RESULT}" == success ]]
+case "${EVENT_NAME}:${TRUST_CLASSIFICATION}" in
+  pull_request:untrusted)
+    [[ "${FORK_CHECKS_RESULT}" == success ]]
+    [[ "${DISPATCH_RESULT}" == skipped ]]
+    [[ "${BUILDKITE_REQUIRED_RESULT}" == skipped ]]
+    ;;
+  pull_request:trusted)
+    [[ "${FORK_CHECKS_RESULT}" == skipped ]]
+    [[ "${DISPATCH_RESULT}" == success ]]
+    [[ "${BUILDKITE_REQUIRED_RESULT}" == success ]]
+    ;;
+  merge_group:protected|push:protected|release:protected)
+    [[ "${FORK_CHECKS_RESULT}" == skipped ]]
+    [[ "${DISPATCH_RESULT}" == success ]]
+    [[ "${BUILDKITE_REQUIRED_RESULT}" == success ]]
+    ;;
+  *)
+    exit 1
+    ;;
+esac"""
+    gate_steps = gate.get("steps")
+    if (
+        not isinstance(gate_steps, list)
+        or len(gate_steps) != 1
+        or not isinstance(gate_steps[0], dict)
+        or set(gate_steps[0]) != {"name", "run"}
+        or gate_steps[0].get("run", "").strip() != expected_gate_script
+    ):
+        errors.append(f"{prefix} final gate script must enforce the exact fork/trusted/protected result matrix")
     return errors
 
 
@@ -938,6 +1312,9 @@ def validate_workflows(root: Path) -> dict[str, Any]:
             errors.append(f"{relative}: missing workflow trigger")
         if path.name.startswith("reusable-"):
             errors.extend(_workflow_call_interface_errors(path, document, relative))
+        errors.extend(_required_check_archive_errors(document, relative))
+        errors.extend(_bounded_concurrency_errors(document, relative))
+        errors.extend(_buildkite_bridge_errors(document, relative))
         for _, key, value in _walk_yaml(document):
             if key == "run" and isinstance(value, str) and _run_uses_caller_inputs(value):
                 errors.append(f"{relative}: run scripts must receive caller inputs through the environment")
@@ -989,11 +1366,141 @@ def _repository_path(root: Path, value: Any) -> tuple[Path | None, str | None]:
     return candidate, None
 
 
+def _markdown_target(raw_target: str) -> str:
+    value = raw_target.strip()
+    if value.startswith("<"):
+        closing = value.find(">", 1)
+        return value[1:closing] if closing > 1 else ""
+    return value.split(maxsplit=1)[0] if value else ""
+
+
+def _reference_label(value: str) -> str:
+    return " ".join(value.split()).casefold()
+
+
+def _markdown_links(text: str) -> tuple[list[str], list[str]]:
+    """Return inline/reference targets plus malformed-reference errors."""
+    definitions: dict[str, str] = {}
+    for match in re.finditer(r"(?m)^[ \t]{0,3}\[([^\]\n]+)\]:[ \t]*(\S.*)$", text):
+        target = _markdown_target(match.group(2))
+        if target:
+            definitions[_reference_label(match.group(1))] = target
+
+    targets = [
+        _markdown_target(match.group(1))
+        for match in re.finditer(r"!?\[[^\]\n]*\]\(([^)\n]+)\)", text)
+    ]
+    errors: list[str] = []
+    occupied: list[tuple[int, int]] = []
+    for match in re.finditer(r"!?\[([^\]\n]+)\]\[([^\]\n]*)\]", text):
+        occupied.append(match.span())
+        label = _reference_label(match.group(2) or match.group(1))
+        target = definitions.get(label)
+        if target is None:
+            errors.append(f"undefined Markdown reference: {match.group(2) or match.group(1)}")
+        else:
+            targets.append(target)
+
+    # Shortcut references are only links when a matching definition exists.
+    # Exclude explicit-reference spans already handled above.
+    for match in re.finditer(r"!?\[([^\]\n]+)\](?![\[(])", text):
+        if any(start <= match.start() < end for start, end in occupied):
+            continue
+        target = definitions.get(_reference_label(match.group(1)))
+        if target is not None:
+            targets.append(target)
+    return targets, errors
+
+
+def _markdown_link_path(root: Path, document: Path, target: str) -> tuple[Path | None, str | None]:
+    try:
+        decoded = urllib.parse.unquote(target)
+        parsed = urllib.parse.urlsplit(decoded)
+    except ValueError:
+        return None, "is not a valid URL"
+    if parsed.scheme or parsed.netloc or target.startswith("//"):
+        return None, "is not a repository-local path"
+    if not parsed.path:
+        return document, None
+    requested = Path(parsed.path)
+    if requested.is_absolute():
+        return None, "must not be absolute"
+    resolved_root = root.resolve()
+    candidate = (document.parent / requested).resolve()
+    if not candidate.is_relative_to(resolved_root):
+        return None, "must not traverse outside the repository root"
+    return candidate, None
+
+
+def _review_metadata_errors(relative: str, text: str) -> list[str]:
+    errors: list[str] = []
+    review_dates = re.findall(r"(?mi)^Last reviewed:\s*(\S+)\s*$", text)
+    cadences = re.findall(r"(?mi)^Review cadence:\s*(\S(?:.*\S)?)\s*$", text)
+    if len(review_dates) != 1:
+        errors.append(f"{relative}: must declare exactly one Last reviewed: YYYY-MM-DD value")
+        return errors
+    if len(cadences) != 1:
+        errors.append(f"{relative}: must declare exactly one Review cadence: N days value")
+        return errors
+    try:
+        reviewed = dt.date.fromisoformat(review_dates[0])
+    except ValueError:
+        errors.append(f"{relative}: Last reviewed must be an ISO YYYY-MM-DD date")
+        return errors
+    cadence_match = re.fullmatch(r"([1-9][0-9]{0,2}) days", cadences[0])
+    if cadence_match is None or int(cadence_match.group(1)) > 366:
+        errors.append(f"{relative}: Review cadence must be between 1 and 366 days")
+        return errors
+    today = dt.date.today()
+    cadence = dt.timedelta(days=int(cadence_match.group(1)))
+    if reviewed > today:
+        errors.append(f"{relative}: Last reviewed date cannot be in the future")
+    elif reviewed + cadence < today:
+        errors.append(f"{relative}: review metadata is stale")
+    return errors
+
+
 def _nonempty_text_file(path: Path) -> bool:
     try:
         return path.is_file() and bool(path.read_text(encoding="utf-8").strip())
     except (OSError, UnicodeError):
         return False
+
+
+def _markdown_errors(path: Path, root: Path) -> list[str]:
+    relative = path.relative_to(root).as_posix()
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        return [f"{relative}: cannot read Markdown: {exc}"]
+    errors: list[str] = []
+    lines = text.splitlines()
+    first = next((line for line in lines if line.strip()), "")
+    if not re.fullmatch(r"# [^#].+", first):
+        errors.append(f"{relative}: first content line must be one H1 title")
+    headings = {
+        match.group(1).strip()
+        for line in lines
+        if (match := re.fullmatch(r"## ([^#].+)", line))
+    }
+    for heading in sorted(DOCUMENTATION_REQUIRED_HEADINGS.get(relative, frozenset())):
+        if heading not in headings:
+            errors.append(f"{relative}: missing required section {heading}")
+    if relative in DOCUMENTATION_REQUIRED_HEADINGS:
+        if not re.search(r"(?mi)^Owner:\s+@mindclade/[a-z0-9-]+\s*$", text):
+            errors.append(f"{relative}: missing explicit Mindclade owner metadata")
+        errors.extend(_review_metadata_errors(relative, text))
+    if re.search(r"(?i)(?:\bTODO\b|\bTBD\b|\bPLACEHOLDER\b|lorem ipsum)", text):
+        errors.append(f"{relative}: contains placeholder documentation")
+    link_targets, reference_errors = _markdown_links(text)
+    errors.extend(f"{relative}: {error}" for error in reference_errors)
+    for target in link_targets:
+        if not target or target.startswith(("#", "https://", "http://", "mailto:")):
+            continue
+        candidate, target_error = _markdown_link_path(root, path, target)
+        if target_error or candidate is None or not candidate.exists():
+            errors.append(f"{relative}: local link target does not exist: {target}")
+    return errors
 
 
 def _complete_metadata_value(value: Any) -> bool:
@@ -1024,8 +1531,9 @@ def validate_metadata(root: Path, component_path: str = "component.yaml", requir
     if not isinstance(document, dict):
         errors.append(f"{component_path}: document root must be a mapping")
         document = {}
-    if not isinstance(document.get("apiVersion"), str) or not document["apiVersion"].strip():
-        errors.append(f"{component_path}: apiVersion must be a non-empty string")
+    api_version = document.get("apiVersion")
+    if api_version not in {"mindclade.io/v1alpha1", "components.mindclade.dev/v1alpha1"}:
+        errors.append(f"{component_path}: apiVersion must be a supported Component contract")
     if document.get("kind") != "Component":
         errors.append(f"{component_path}: kind must be Component")
     metadata = document.get("metadata")
@@ -1042,6 +1550,11 @@ def validate_metadata(root: Path, component_path: str = "component.yaml", requir
         value = spec.get(key)
         if not isinstance(value, str) or not value.strip():
             errors.append(f"{component_path}: spec.{key} must be a non-empty string")
+    if api_version == "mindclade.io/v1alpha1":
+        for key in ("repository_class", "trust_tier", "recovery_tier"):
+            value = spec.get(key)
+            if not isinstance(value, str) or not value.strip():
+                errors.append(f"{component_path}: spec.{key} must be a non-empty string")
     dependencies = spec.get("dependencies")
     if not isinstance(dependencies, list):
         errors.append(f"{component_path}: spec.dependencies must be a list")
@@ -1059,7 +1572,7 @@ def validate_metadata(root: Path, component_path: str = "component.yaml", requir
     release = spec.get("release")
     if not isinstance(release, dict):
         errors.append(f"{component_path}: spec.release must be a mapping")
-    else:
+    elif api_version == "mindclade.io/v1alpha1":
         for key in ("strategy", "artifact"):
             value = release.get(key)
             if not isinstance(value, str) or not value.strip():
@@ -1068,6 +1581,25 @@ def validate_metadata(root: Path, component_path: str = "component.yaml", requir
             errors.append(f"{component_path}: spec.release.immutable must be a boolean")
         if release and not _complete_metadata_value(release):
             errors.append(f"{component_path}: spec.release values must be complete")
+    else:
+        mode = release.get("mode")
+        if not isinstance(mode, str) or not mode.strip():
+            errors.append(f"{component_path}: spec.release.mode must be a non-empty string")
+        for key in ("artifact", "version"):
+            value = release.get(key)
+            if value is not None and (not isinstance(value, str) or not value.strip()):
+                errors.append(f"{component_path}: spec.release.{key} must be null or a non-empty string")
+        if not isinstance(release.get("public"), bool):
+            errors.append(f"{component_path}: spec.release.public must be a boolean")
+        controls = release.get("controls")
+        if not isinstance(controls, list) or any(not isinstance(control, str) or not control.strip() for control in controls):
+            errors.append(f"{component_path}: spec.release.controls must be a list of non-empty strings")
+        if mode != "none" and (not isinstance(release.get("artifact"), str) or not isinstance(release.get("version"), str)):
+            errors.append(f"{component_path}: an active release must declare artifact and version")
+        for key in ("type", "visibility", "dataClassification", "description"):
+            value = spec.get(key)
+            if not isinstance(value, str) or not value.strip():
+                errors.append(f"{component_path}: spec.{key} must be a non-empty string")
     for required_path in required_files:
         candidate, required_error = _repository_path(resolved_root, required_path)
         if required_error:
@@ -1090,14 +1622,21 @@ def validate_documentation(root: Path, documentation_roots: Iterable[str] = ()) 
         if candidate.is_file():
             if not _nonempty_text_file(candidate):
                 errors.append(f"{path}: missing or empty")
+            elif candidate.suffix.lower() == ".md":
+                errors.extend(_markdown_errors(candidate, resolved_root))
         elif candidate.is_dir():
-            markdown_files = (
+            markdown_files = sorted(
                 markdown.resolve()
                 for markdown in candidate.rglob("*.md")
                 if markdown.resolve().is_relative_to(resolved_root)
             )
-            if not any(_nonempty_text_file(markdown) for markdown in markdown_files):
+            if not markdown_files:
                 errors.append(f"{path}: contains no non-empty Markdown files")
+            for markdown in markdown_files:
+                if not _nonempty_text_file(markdown):
+                    errors.append(f"{markdown.relative_to(resolved_root)}: missing or empty")
+                else:
+                    errors.extend(_markdown_errors(markdown, resolved_root))
         else:
             errors.append(f"{path}: missing or empty")
     return result(not errors, errors, check="documentation")
@@ -1333,12 +1872,27 @@ def command_context(args: argparse.Namespace) -> int:
 def command_validate(args: argparse.Namespace, names: Iterable[str] | None = None) -> int:
     root = Path(args.root)
     if args.command == "metadata":
-        outcome = validate_metadata(root, args.component_path, _relative_paths(args.required_files))
+        required_files = _relative_paths(args.required_files)
+        outcome = validate_metadata(root, args.component_path, required_files)
+        closure_paths = [args.component_path, *required_files]
     elif args.command == "documentation":
-        outcome = validate_documentation(root, _relative_paths(args.documentation_roots))
+        documentation_roots = _relative_paths(args.documentation_roots)
+        outcome = validate_documentation(root, documentation_roots)
+        closure_paths = []
+        for relative in documentation_roots or list(DOCUMENTATION_REQUIRED_HEADINGS):
+            candidate, path_error = _repository_path(root.resolve(), relative)
+            if path_error or candidate is None or not candidate.is_dir():
+                closure_paths.append(relative)
+            else:
+                closure_paths.extend(
+                    markdown.relative_to(root.resolve()).as_posix()
+                    for markdown in sorted(candidate.rglob("*.md"))
+                    if markdown.resolve().is_relative_to(root.resolve())
+                )
     else:
         outcome = validate(root, names)
-    closure_digest = source_closure_digest(root)
+        closure_paths = None
+    closure_digest = source_closure_digest(root, closure_paths)
     outcome.update({
         "verdict": "allow" if outcome["ok"] else "deny",
         "reason_code": "accepted" if outcome["ok"] else "validation_failed",
@@ -1371,6 +1925,9 @@ def parser() -> argparse.ArgumentParser:
     validate_command.add_argument("--checks")
     validate_command.add_argument("--github-output")
     validate_command.add_argument("--implementation-root", default=str(ROOT))
+    template_pins = subcommands.add_parser("template-pins")
+    template_pins.add_argument("--root", required=True)
+    template_pins.add_argument("--approved-main-revision", required=True)
     for name in CHECKS:
         check = subcommands.add_parser(name)
         check.add_argument("--root", required=True)
@@ -1388,6 +1945,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     if args.command == "context":
         return command_context(args)
+    if args.command == "template-pins":
+        outcome = validate_template_pins(Path(args.root), args.approved_main_revision)
+        print(canonical_json(outcome))
+        return 0 if outcome["ok"] else 1
     if args.command == "validate":
         try:
             return command_validate(args, selected_checks(args.checks))

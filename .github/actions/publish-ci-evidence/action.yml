@@ -42,6 +42,9 @@ outputs:
   evidence_path:
     description: Runner-local evidence path.
     value: ${{ steps.emit.outputs.evidence_path }}
+  artifact_path:
+    description: Private staged directory containing the immutable upload snapshot.
+    value: ${{ steps.emit.outputs.artifact_path }}
   evidence_digest:
     description: SHA-256 digest of canonical evidence JSON.
     value: ${{ steps.emit.outputs.evidence_digest }}
@@ -54,6 +57,9 @@ outputs:
   artifact_url:
     description: GitHub artifact URL.
     value: ${{ steps.upload.outputs.artifact-url }}
+  artifact_digest:
+    description: SHA-256 digest reported by GitHub for the uploaded artifact.
+    value: ${{ steps.reference.outputs.artifact_digest }}
 
 runs:
   using: composite
@@ -78,6 +84,8 @@ runs:
         if [[ -z "${artifact_name}" ]]; then
           artifact_name="ci-evidence-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
         fi
+        staging_dir="$(mktemp -d "${RUNNER_TEMP}/mindclade-ci-evidence.XXXXXX")"
+        chmod 0700 "${staging_dir}"
         python3 "${IMPLEMENTATION_ROOT}/tools/emit_ci_evidence.py" emit \
           --context-json "${CONTEXT_JSON}" \
           --producer "${PRODUCER}" \
@@ -88,28 +96,62 @@ runs:
           --pipeline-definition-revision "${PIPELINE_DEFINITION_REVISION}" \
           --report-paths "${REPORT_PATHS}" \
           --artifact-name "${artifact_name}" \
-          --output "${RUNNER_TEMP}/ci-evidence.json" \
+          --output "${staging_dir}/ci-evidence.json" \
+          --staging-dir "${staging_dir}" \
           --github-output "${GITHUB_OUTPUT}"
     - id: upload
       name: Upload immutable evidence artifact
       uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       with:
         name: ${{ steps.emit.outputs.artifact_name }}
-        path: |
-          ${{ steps.emit.outputs.evidence_path }}
-          ${{ inputs.report-paths }}
+        path: ${{ steps.emit.outputs.artifact_path }}
         if-no-files-found: error
         include-hidden-files: false
         overwrite: false
         retention-days: 90
-    - id: reference
-      name: Bind artifact reference to evidence digest
+    - id: verification-path
+      name: Create a private artifact verification directory
+      shell: bash
+      run: |
+        set -euo pipefail
+        verification_path="$(mktemp -d "${RUNNER_TEMP}/mindclade-ci-evidence-verify.XXXXXX")"
+        chmod 0700 "${verification_path}"
+        printf 'path=%s\n' "${verification_path}" >> "${GITHUB_OUTPUT}"
+    - name: Download the exact immutable artifact
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      with:
+        artifact-ids: ${{ steps.upload.outputs.artifact-id }}
+        path: ${{ steps.verification-path.outputs.path }}
+        merge-multiple: true
+    - name: Reverify the complete uploaded evidence payload
       shell: bash
       env:
+        EVIDENCE_DIGEST: ${{ steps.emit.outputs.evidence_digest }}
+        IMPLEMENTATION_ROOT: ${{ github.action_path }}/../../..
+        VERIFICATION_PATH: ${{ steps.verification-path.outputs.path }}
+      run: |
+        set -euo pipefail
+        python3 "${IMPLEMENTATION_ROOT}/tools/emit_ci_evidence.py" verify-artifact \
+          --artifact-directory "${VERIFICATION_PATH}" \
+          --expected-evidence-digest "${EVIDENCE_DIGEST}"
+    - id: reference
+      name: Bind artifact reference to evidence and upload digests
+      shell: bash
+      env:
+        ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
         ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
         EVIDENCE_DIGEST: ${{ steps.emit.outputs.evidence_digest }}
       run: |
         set -euo pipefail
-        printf 'evidence_ref=github-actions://%s/%s/artifacts/%s?digest=%s\n' \
+        [[ "${ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]]
+        case "${ARTIFACT_DIGEST}" in
+          sha256:[0-9a-f][0-9a-f]*) normalized_artifact_digest="${ARTIFACT_DIGEST}" ;;
+          [0-9a-f][0-9a-f]*) normalized_artifact_digest="sha256:${ARTIFACT_DIGEST}" ;;
+          *) exit 1 ;;
+        esac
+        [[ "${normalized_artifact_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+        [[ "${EVIDENCE_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+        printf 'artifact_digest=%s\n' "${normalized_artifact_digest}" >> "${GITHUB_OUTPUT}"
+        printf 'evidence_ref=github-actions://%s/%s/artifacts/%s?evidence_digest=%s&artifact_digest=%s\n' \
           "${GITHUB_REPOSITORY}" "${GITHUB_RUN_ID}" "${ARTIFACT_ID}" \
-          "${EVIDENCE_DIGEST}" >> "${GITHUB_OUTPUT}"
+          "${EVIDENCE_DIGEST}" "${normalized_artifact_digest}" >> "${GITHUB_OUTPUT}"

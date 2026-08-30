@@ -8,6 +8,10 @@ on:
       - main
   workflow_dispatch:
 
+concurrency:
+  group: mindclade-org-self-test-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -19,18 +23,19 @@ jobs:
     permissions:
       contents: read
     steps:
-      - id: context
-        name: Validate caller context
-        uses: $/.github/actions/validate-trusted-context
-        with:
-          expected-source-revision: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Verify immutable implementation closure
-        uses: $/.github/actions/verify-pinned-actions
       - name: Check out exact source revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ steps.context.outputs.source_revision }}
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
+      - id: context
+        name: Validate caller context
+        uses: ./.github/actions/validate-trusted-context
+        with:
+          expected-source-revision: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify immutable implementation closure
+        uses: ./.github/actions/verify-pinned-actions
       - name: Install checksum-verified CI launchers
         env:
           BAZELISK_SHA256: 5a408715e932c0250d28bd84555f12edbf70117de42f9181691c736eacc4a992
@@ -59,6 +64,14 @@ jobs:
         run: |
           set -euo pipefail
           just ci
+      - name: Verify internal template pins on approved main
+        env:
+          APPROVED_MAIN_REVISION: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          python3 tools/validate_reusable_workflows.py template-pins \
+            --root "${GITHUB_WORKSPACE}" \
+            --approved-main-revision "${APPROVED_MAIN_REVISION}"
       - name: Verify validation leaves no generated drift
         run: |
           set -euo pipefail

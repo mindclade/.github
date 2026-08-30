@@ -18,9 +18,22 @@ common_outputs := {
 
 allowed_input_types := {"string", "boolean", "number"}
 allowed_buildkite_secrets := {
+  "buildkite_cancel_token",
   "buildkite_dispatch_token",
   "buildkite_evidence_token",
   "buildkite_pipeline"
+}
+buildkite_workflow_paths := {
+  ".github/workflows/reusable-buildkite-dispatch.yml",
+  ".github/workflows/reusable-required-check.yml"
+}
+derived_trust_inputs := {
+  "trusted_context",
+  "trust_classification",
+  "execution_tier",
+  "source_trust",
+  "fork",
+  "ref_protected"
 }
 
 workflow_data := input.workflow if {
@@ -35,22 +48,9 @@ workflow_call := workflow_data.workflow_call if {
   is_object(workflow_data.workflow_call)
 }
 
-workflow_name := object.get(workflow_data, "name", object.get(input, "workflow_name", ""))
-
 is_buildkite_workflow if {
-  workflow_name == "reusable-buildkite-dispatch"
-}
-
-is_buildkite_workflow if {
-  workflow_name == "reusable-required-check"
-}
-
-is_buildkite_workflow if {
-  endswith(workflow_name, "/reusable-buildkite-dispatch.yml")
-}
-
-is_buildkite_workflow if {
-  endswith(workflow_name, "/reusable-required-check.yml")
+  workflow_path := object.get(input, "workflow_path", "")
+  buildkite_workflow_paths[workflow_path]
 }
 
 denials contains violation if {
@@ -120,14 +120,27 @@ denials contains violation if {
 }
 
 denials contains violation if {
-  forbidden := {"trusted_context", "trust_classification", "execution_tier"}
   some name
-  forbidden[name]
+  derived_trust_inputs[lower(name)]
   workflow_call.inputs[name]
   violation := {
     "code": "DERIVED_TRUST_INPUT_FORBIDDEN",
     "message": "trusted context and execution tier are derived from the event and cannot be caller inputs",
     "input": name
+  }
+}
+
+denials contains violation if {
+  some first, second
+  first < second
+  workflow_call.inputs[first]
+  workflow_call.inputs[second]
+  lower(first) == lower(second)
+  violation := {
+    "code": "WORKFLOW_INPUT_CASE_COLLISION",
+    "message": "workflow_call input names must be unique after case folding",
+    "input": first,
+    "conflict": second
   }
 }
 
@@ -195,7 +208,7 @@ denials contains violation if {
   is_buildkite_workflow
   some name
   workflow_call.secrets[name]
-  not allowed_buildkite_secrets[name]
+  not allowed_buildkite_secrets[lower(name)]
   violation := {
     "code": "BUILDKITE_SECRET_UNAPPROVED",
     "message": "Buildkite workflow secret is not allowlisted",

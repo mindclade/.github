@@ -9,7 +9,7 @@ inputs:
 
 outputs:
   verdict:
-    description: PASS or FAIL.
+    description: allow or deny.
     value: ${{ steps.verify.outputs.verdict }}
   reason_code:
     description: Stable machine-readable verification reason.

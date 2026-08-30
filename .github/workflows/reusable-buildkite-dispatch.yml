@@ -67,6 +67,10 @@ on:
         description: Validated protected pipeline-definition revision.
         value: ${{ jobs.dispatch.outputs.pipeline_definition_revision }}
 
+concurrency:
+  group: mindclade-org-buildkite-dispatch-${{ github.repository }}
+  cancel-in-progress: true
+
 permissions: {}
 
 jobs:

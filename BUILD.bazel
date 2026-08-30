@@ -4,27 +4,45 @@ package(default_visibility = ["//visibility:private"])
 
 config_setting(
     name = "darwin_amd64",
-    constraint_values = ["@platforms//os:osx", "@platforms//cpu:x86_64"],
+    constraint_values = [
+        "@platforms//os:osx",
+        "@platforms//cpu:x86_64",
+    ],
 )
 
 config_setting(
     name = "darwin_arm64",
-    constraint_values = ["@platforms//os:osx", "@platforms//cpu:arm64"],
+    constraint_values = [
+        "@platforms//os:osx",
+        "@platforms//cpu:arm64",
+    ],
 )
 
 config_setting(
     name = "linux_amd64",
-    constraint_values = ["@platforms//os:linux", "@platforms//cpu:x86_64"],
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
 )
 
 config_setting(
     name = "linux_arm64",
-    constraint_values = ["@platforms//os:linux", "@platforms//cpu:arm64"],
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:arm64",
+    ],
 )
 
 filegroup(
     name = "workflow_sources",
-    srcs = glob([".github/workflows/*.yaml", ".github/workflows/*.yml"], allow_empty = True),
+    srcs = glob(
+        [
+            ".github/workflows/*.yaml",
+            ".github/workflows/*.yml",
+        ],
+        allow_empty = True,
+    ),
 )
 
 filegroup(
@@ -34,12 +52,18 @@ filegroup(
 
 filegroup(
     name = "workflow_template_sources",
-    srcs = glob(["workflow-templates/*"], allow_empty = True),
+    srcs = glob(
+        ["workflow-templates/*"],
+        allow_empty = True,
+    ),
 )
 
 filegroup(
     name = "policy_sources",
-    srcs = glob(["policy/*.rego", "policy/tests/*.rego"]),
+    srcs = glob([
+        "policy/*.rego",
+        "policy/tests/*.rego",
+    ]),
 )
 
 filegroup(
@@ -83,36 +107,46 @@ genrule(
 
 genrule(
     name = "policy_check",
-    srcs = glob(["policy/*.rego", "policy/tests/*.rego"]),
-    tools = [":opa_tool"],
+    srcs = glob([
+        "policy/*.rego",
+        "policy/tests/*.rego",
+    ]),
     outs = ["policy_check.stamp"],
     cmd = "$(location :opa_tool) test --format=json policy > /dev/null && touch $@",
+    tools = [":opa_tool"],
 )
 
 genrule(
     name = "workflow_lint",
     srcs = glob(
         [
+            ".github/ISSUE_TEMPLATE/*.yaml",
+            ".github/ISSUE_TEMPLATE/*.yml",
+            ".github/actions/**/*.yaml",
+            ".github/actions/**/*.yml",
+            ".github/dependabot.yml",
             ".github/workflows/*.yaml",
             ".github/workflows/*.yml",
             "workflow-templates/*.yaml",
             "workflow-templates/*.yml",
-        ],
+        ] + ["component.yaml"],
         allow_empty = True,
     ),
-    tools = [":actionlint_tool"],
     outs = ["workflow_lint.stamp"],
-    # actionlint does not recognise the repository's explicit immutable
-    # implementation-action prefix. Rewrite only the strict, validator-accepted
-    # form in a declared temporary output directory; malformed $/ references
-    # remain untouched and continue to be linted as errors.
-    cmd = "set -eu; input_dir=$(@D)/actionlint-inputs; mkdir -p $$input_dir; index=0; for source in $(SRCS); do index=$$((index + 1)); awk '/^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*\\$$\\/\\.github\\/actions\\/[A-Za-z0-9._\\/-]+[[:space:]]*(#.*)?$$/ { sub(/\\$$\\/\\.github\\/actions\\//, \"./.github/actions/\") } { print }' $$source > $$input_dir/$$index.yml; done; $(location :actionlint_tool) $$input_dir/*.yml > /dev/null && touch $@",
+    # yamllint covers every governed YAML document. actionlint receives only
+    # workflows; it does not recognise the reusable workflow's explicit
+    # immutable implementation-action prefix, so rewrite only the strict,
+    # validator-accepted form in a declared temporary output directory.
+    cmd = "set -eu; $(location @mindclade_yamllint//:yamllint_cli) -d relaxed $(SRCS) > /dev/null; input_dir=$(@D)/actionlint-inputs; mkdir -p $$input_dir; index=0; for source in $(SRCS); do case $$source in .github/workflows/*|workflow-templates/*) index=$$((index + 1)); awk '/^[[:space:]]*(-[[:space:]]+)?uses:[[:space:]]*\\$$\\/\\.github\\/actions\\/[A-Za-z0-9._\\/-]+[[:space:]]*(#.*)?$$/ { sub(/\\$$\\/\\.github\\/actions\\//, \"./.github/actions/\") } { print }' $$source > $$input_dir/$$index.yml ;; esac; done; test $$index -gt 0; $(location :actionlint_tool) $$input_dir/*.yml > /dev/null && touch $@",
+    tools = [
+        ":actionlint_tool",
+        "@mindclade_yamllint//:yamllint_cli",
+    ],
 )
 
 py_binary(
     name = "validate_reusable_workflows",
     srcs = ["tools/validate_reusable_workflows.py"],
-    main = "tools/validate_reusable_workflows.py",
     data = [
         ":local_action_sources",
         ":schema_sources",
@@ -120,14 +154,15 @@ py_binary(
         ":workflow_template_sources",
     ],
     legacy_create_init = 0,
+    main = "tools/validate_reusable_workflows.py",
 )
 
 py_binary(
     name = "emit_ci_evidence",
     srcs = ["tools/emit_ci_evidence.py"],
-    main = "tools/emit_ci_evidence.py",
     data = [":schema_sources"],
     legacy_create_init = 0,
+    main = "tools/emit_ci_evidence.py",
 )
 
 py_test(
@@ -136,15 +171,15 @@ py_test(
         "tests/test_reusable_workflow_contract.py",
         "tools/validate_reusable_workflows.py",
     ],
-    main = "tests/test_reusable_workflow_contract.py",
-    imports = ["tools"],
     data = [
         ":policy_check",
         ":schema_sources",
         ":test_fixtures",
         ":workflow_lint",
     ],
+    imports = ["tools"],
     legacy_create_init = 0,
+    main = "tests/test_reusable_workflow_contract.py",
 )
 
 py_test(
@@ -154,15 +189,15 @@ py_test(
         "tools/emit_ci_evidence.py",
         "tools/validate_reusable_workflows.py",
     ],
-    main = "tests/test_declared_permissions.py",
-    imports = ["tools"],
     data = [
         ":policy_check",
         ":schema_sources",
         ":test_fixtures",
         ":workflow_lint",
     ],
+    imports = ["tools"],
     legacy_create_init = 0,
+    main = "tests/test_declared_permissions.py",
 )
 
 py_test(
@@ -172,15 +207,15 @@ py_test(
         "tools/emit_ci_evidence.py",
         "tools/validate_reusable_workflows.py",
     ],
-    main = "tests/test_action_digest_pinning.py",
-    imports = ["tools"],
     data = [
         ":policy_check",
         ":schema_sources",
         ":test_fixtures",
         ":workflow_lint",
     ],
+    imports = ["tools"],
     legacy_create_init = 0,
+    main = "tests/test_action_digest_pinning.py",
 )
 
 test_suite(

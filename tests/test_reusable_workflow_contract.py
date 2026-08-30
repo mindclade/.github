@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import datetime as dt
 import json
 import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -35,12 +37,63 @@ def reusable_workflow(
 
 
 class ReusableWorkflowContractTest(unittest.TestCase):
+    def test_python_and_rego_reusable_interface_constants_are_identical(self) -> None:
+        policy = (ROOT / "policy/reusable_workflow_interface.rego").read_text(encoding="utf-8")
+
+        def rego_set(name: str) -> set[str]:
+            block = policy.split(f"{name} := {{", 1)[1].split("}", 1)[0]
+            return set(re.findall(r'"([a-z0-9_-]+)"', block))
+
+        self.assertEqual(set(validator.DERIVED_TRUST_INPUTS), rego_set("derived_trust_inputs"))
+        self.assertEqual(set(validator.ALLOWED_INPUT_TYPES), rego_set("allowed_input_types"))
+        self.assertEqual(set(validator.BUILDKITE_SECRETS), rego_set("allowed_buildkite_secrets"))
+        path_block = policy.split("buildkite_workflow_paths := {", 1)[1].split("}", 1)[0]
+        self.assertEqual(set(validator.BUILDKITE_WORKFLOW_PATHS), set(re.findall(r'"([^"]+)"', path_block)))
+
+    def test_python_and_rego_permission_allowlists_are_identical(self) -> None:
+        policy = (ROOT / "policy/workflow_permissions.rego").read_text(encoding="utf-8")
+        block = policy.split("allowed_permissions := {", 1)[1].split("}\n", 1)[0]
+        permissions = dict(re.findall(r'^  "([^"]+)": "([^"]+)"(?:,)?$', block, re.MULTILINE))
+        self.assertEqual(validator.ALLOWED_PERMISSIONS, permissions)
+        guard_block = policy.split("protected_tier_guards := {", 1)[1].split("}\n", 1)[0]
+        self.assertEqual(set(validator.PROTECTED_TIER_GUARDS), set(re.findall(r'^  "([^"]+)"(?:,)?$', guard_block, re.MULTILINE)))
+
     def test_repository_matches_the_approved_inventory(self) -> None:
         outcome = validator.validate_inventory(ROOT)
         self.assertTrue(outcome["ok"], outcome["errors"])
         self.assertEqual(56, outcome["expected"])
         self.assertIn(".github/workflows/self-test.yml", validator.EXPECTED_INVENTORY)
         self.assertIn("policy/tests/reusable_workflow_interface_test.rego", validator.EXPECTED_INVENTORY)
+
+    def test_complete_validator_accepts_the_real_repository(self) -> None:
+        outcome = validator.validate(ROOT)
+        self.assertTrue(outcome["ok"], outcome["errors"])
+
+    def test_buildkite_template_has_secretless_fork_and_trusted_dispatch_paths(self) -> None:
+        template = ROOT / validator.BUILDKITE_BRIDGE_TEMPLATE_PATH
+        document, parse_error = validator._parsed_yaml(template, ROOT)
+        self.assertIsNone(parse_error)
+        self.assertIsInstance(document, dict)
+        self.assertEqual([], validator._buildkite_bridge_errors(document, Path(validator.BUILDKITE_BRIDGE_TEMPLATE_PATH)))
+        required_secrets = document["jobs"]["buildkite_required"]["secrets"]
+        self.assertEqual(
+            "${{ secrets.MINDCLADE_BUILDKITE_CANCEL_TOKEN }}",
+            required_secrets["buildkite_cancel_token"],
+        )
+
+        source = template.read_text(encoding="utf-8")
+        mutations = (
+            source.replace("  pull_request:\n", "  pull_request_target:\n", 1),
+            source.replace("needs.classify.outputs.trust_classification == 'trusted'", "needs.classify.outputs.trust_classification == 'untrusted'", 1),
+            source.replace("    uses: mindclade/.github/.github/workflows/reusable-documentation-check.yml@", "    secrets:\n      leaked: ${{ secrets.MINDCLADE_BUILDKITE_PIPELINE }}\n    uses: mindclade/.github/.github/workflows/reusable-documentation-check.yml@", 1),
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                candidate = root / validator.BUILDKITE_BRIDGE_TEMPLATE_PATH
+                candidate.parent.mkdir(parents=True)
+                candidate.write_text(mutation, encoding="utf-8")
+                self.assertFalse(validator.validate_workflows(root)["ok"])
 
     def test_inventory_rejects_undeclared_executable_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -55,6 +108,11 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             outcome = validator.validate_inventory(root)
             self.assertFalse(outcome["ok"])
             self.assertIn("unexpected: .github/workflows/evil.yaml", outcome["errors"])
+            extra.unlink()
+            (root / "BLUEPRINT.md").write_text("stale local authority\n", encoding="utf-8")
+            outcome = validator.validate_inventory(root)
+            self.assertFalse(outcome["ok"])
+            self.assertIn("unexpected: BLUEPRINT.md", outcome["errors"])
 
     def test_context_interface_writes_all_contract_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -124,6 +182,66 @@ class ReusableWorkflowContractTest(unittest.TestCase):
         outcome = validator.validate_workflows(ROOT)
         self.assertTrue(outcome["ok"], outcome["errors"])
 
+    def test_all_repository_workflows_have_bounded_concurrency(self) -> None:
+        workflow_paths = sorted((ROOT / ".github/workflows").glob("*.yml"))
+        self.assertEqual(8, len(workflow_paths))
+        for path in workflow_paths:
+            with self.subTest(workflow=path.name):
+                document, parse_error = validator._parsed_yaml(path, ROOT)
+                self.assertIsNone(parse_error)
+                self.assertEqual(
+                    [],
+                    validator._bounded_concurrency_errors(document, path.relative_to(ROOT)),
+                )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workflow = root / ".github/workflows/self-test.yml"
+            workflow.parent.mkdir(parents=True)
+            workflow.write_text(
+                "on: [push]\npermissions: {}\njobs:\n  test:\n    runs-on: ubuntu-24.04\n",
+                encoding="utf-8",
+            )
+            outcome = validator.validate_workflows(root)
+            self.assertFalse(outcome["ok"])
+            self.assertTrue(any("bounded concurrency" in error for error in outcome["errors"]))
+
+        revision_lane = {
+            "jobs": {"test": {"runs-on": "ubuntu-24.04"}},
+            "concurrency": {
+                "group": "reusable-${{ github.repository }}-${{ inputs.source_revision }}",
+                "cancel-in-progress": True,
+            },
+        }
+        errors = validator._bounded_concurrency_errors(
+            revision_lane,
+            Path(".github/workflows/reusable-documentation-check.yml"),
+        )
+        self.assertTrue(any("must not create a lane per source revision" in error for error in errors))
+
+    def test_buildkite_secret_classification_uses_the_repository_path_not_display_name(self) -> None:
+        secret = "    secrets:\n      buildkite_evidence_token:\n        required: true\n"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workflows = root / ".github/workflows"
+            workflows.mkdir(parents=True)
+            spoof = workflows / "reusable-documentation-check.yml"
+            spoof.write_text(
+                "name: reusable-required-check\n" + reusable_workflow(secrets=secret),
+                encoding="utf-8",
+            )
+            outcome = validator.validate_workflows(root)
+            self.assertFalse(outcome["ok"])
+            self.assertTrue(any("non-Buildkite reusable workflow" in error for error in outcome["errors"]))
+
+            spoof.unlink()
+            approved = workflows / "reusable-required-check.yml"
+            approved.write_text(
+                "name: arbitrary-display-name\n" + reusable_workflow(secrets=secret),
+                encoding="utf-8",
+            )
+            self.assertTrue(validator.validate_workflows(root)["ok"])
+
     def test_action_policy_rejects_ambiguous_yaml_spellings(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -190,6 +308,9 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                         "      Execution_Tier:\n"
                         "        required: false\n"
                         "        type: string\n"
+                        "      source_trust:\n"
+                        "        required: false\n"
+                        "        type: object\n"
                     ),
                 ),
                 encoding="utf-8",
@@ -201,6 +322,8 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             self.assertIn("source_revision input must have type: string", joined)
             self.assertIn("workflow_call input execution_tier is derived and forbidden", joined)
             self.assertIn("workflow_call input Execution_Tier is derived and forbidden", joined)
+            self.assertIn("workflow_call input source_trust is derived and forbidden", joined)
+            self.assertIn("workflow_call input source_trust must declare string, boolean, or number type", joined)
             self.assertIn("differ only by case", joined)
 
     def test_reusable_workflow_rejects_missing_outputs_and_unapproved_secrets(self) -> None:
@@ -273,6 +396,19 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             (first_root / ".github/workflows/evil.yaml").write_text("on: [push]\npermissions: {}\n", encoding="utf-8")
             self.assertNotEqual(baseline, validator.source_closure_digest(first_root))
 
+    def test_selected_source_closure_does_not_hash_unrelated_consumer_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            component = root / "component.yaml"
+            component.write_text("kind: Component\n", encoding="utf-8")
+            unrelated = root / "large-build-output.bin"
+            unrelated.write_bytes(b"unrelated")
+            baseline = validator.source_closure_digest(root, ["component.yaml"])
+            unrelated.write_bytes(b"changed")
+            self.assertEqual(baseline, validator.source_closure_digest(root, ["component.yaml"]))
+            component.write_text("kind: Changed\n", encoding="utf-8")
+            self.assertNotEqual(baseline, validator.source_closure_digest(root, ["component.yaml"]))
+
     def test_composite_action_interface_is_checked_without_actionlint(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -295,6 +431,9 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                 "spec:\n"
                 "  owner: developer-platform\n"
                 "  maturity: pre-production\n"
+                "  repository_class: governance-source\n"
+                "  trust_tier: trusted\n"
+                "  recovery_tier: tier-1\n"
                 "  dependencies: []\n"
                 "  release:\n"
                 "    strategy: reviewed-main\n"
@@ -309,6 +448,33 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             )
             self.assertTrue(validator.validate_metadata(root)["ok"])
 
+            product = (
+                "apiVersion: components.mindclade.dev/v1alpha1\n"
+                "kind: Component\n"
+                "metadata:\n"
+                "  name: example-product\n"
+                "spec:\n"
+                "  type: repository\n"
+                "  owner: '@mindclade/platform-runtime'\n"
+                "  maturity: experimental\n"
+                "  visibility: private\n"
+                "  dataClassification: internal\n"
+                "  description: Governed product repository.\n"
+                "  dependencies: []\n"
+                "  release:\n"
+                "    mode: none\n"
+                "    artifact: null\n"
+                "    version: null\n"
+                "    public: false\n"
+                "    controls: []\n"
+            )
+            component.write_text(product, encoding="utf-8")
+            self.assertTrue(validator.validate_metadata(root)["ok"])
+            component.write_text(product.replace("    mode: none", "    mode: null"), encoding="utf-8")
+            self.assertFalse(validator.validate_metadata(root)["ok"])
+            component.write_text(product.replace("    mode: none", "    mode: package"), encoding="utf-8")
+            self.assertFalse(validator.validate_metadata(root)["ok"])
+
             invalid = (
                 valid.replace("  owner: developer-platform", "  owner: null"),
                 valid.replace("  owner: developer-platform", "  owner: NULL"),
@@ -317,6 +483,9 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                 valid.replace("  owner: developer-platform", "  owner: 1:20"),
                 valid.replace("  maturity: pre-production", "  maturity: Null"),
                 valid.replace("  maturity: pre-production", "  maturity: []"),
+                valid.replace("  repository_class: governance-source\n", ""),
+                valid.replace("  trust_tier: trusted", "  trust_tier: null"),
+                valid.replace("  recovery_tier: tier-1", "  recovery_tier: []"),
                 valid.replace("  dependencies: []", "  dependencies: null"),
                 valid.replace("  dependencies: []", "  dependencies: [NULL]"),
                 valid.replace("  dependencies: []", "  dependencies:\n    - null"),
@@ -349,6 +518,9 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                 "spec:\n"
                 "  owner: developer-platform\n"
                 "  maturity: pre-production\n"
+                "  repository_class: governance-source\n"
+                "  trust_tier: trusted\n"
+                "  recovery_tier: tier-1\n"
                 "  dependencies: []\n"
                 "  release:\n"
                 "    strategy: reviewed-main\n"
@@ -356,7 +528,12 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                 "    immutable: true\n"
             )
             (root / "component.yaml").write_text(component_source, encoding="utf-8")
-            (root / "README.md").write_text("# Inside\n", encoding="utf-8")
+            (root / "README.md").write_text(
+                "# Inside\n\nOwner: @mindclade/developer-platform\n"
+                f"Last reviewed: {dt.date.today().isoformat()}\nReview cadence: 365 days\n\n"
+                "## Ownership\n\nOwned.\n\n## Activation boundary\n\nSource only.\n",
+                encoding="utf-8",
+            )
             (outside / "component.yaml").write_text(component_source, encoding="utf-8")
             (outside / "README.md").write_text("# Outside\n", encoding="utf-8")
 
@@ -376,6 +553,72 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             self.assertFalse(validator.validate_metadata(root, component_path="component-link.yaml")["ok"])
             self.assertFalse(validator.validate_metadata(root, required_files=["README-link.md"])["ok"])
             self.assertFalse(validator.validate_documentation(root, ["README-link.md"])["ok"])
+
+    def test_documentation_requires_structure_ownership_and_resolved_local_links(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            readme = root / "README.md"
+            readme.write_text("TODO: [missing](missing.md)\n", encoding="utf-8")
+            outcome = validator.validate_documentation(root, ["README.md"])
+            self.assertFalse(outcome["ok"])
+            joined = "\n".join(outcome["errors"])
+            self.assertIn("one H1 title", joined)
+            self.assertIn("missing required section Ownership", joined)
+            self.assertIn("missing explicit Mindclade owner metadata", joined)
+            self.assertIn("contains placeholder documentation", joined)
+            self.assertIn("local link target does not exist", joined)
+
+    def test_documentation_resolves_nested_parent_and_reference_links_without_root_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            root = base / "repository"
+            docs = root / "docs/deep"
+            docs.mkdir(parents=True)
+            (root / "README.md").write_text("# Root\n", encoding="utf-8")
+            (root / "GOVERNANCE.md").write_text("# Governance\n", encoding="utf-8")
+            guide = docs / "guide.md"
+            guide.write_text(
+                "# Guide\n\n[Root](../../README.md) and [governance][gov].\n\n"
+                "[gov]: <../../GOVERNANCE.md> \"policy\"\n",
+                encoding="utf-8",
+            )
+            self.assertTrue(validator.validate_documentation(root, ["docs"])["ok"])
+
+            outside = base / "outside.md"
+            outside.write_text("# Outside\n", encoding="utf-8")
+            guide.write_text(
+                "# Guide\n\n[escape](../../../outside.md) and [missing][unknown].\n",
+                encoding="utf-8",
+            )
+            outcome = validator.validate_documentation(root, ["docs"])
+            self.assertFalse(outcome["ok"])
+            joined = "\n".join(outcome["errors"])
+            self.assertIn("local link target does not exist", joined)
+            self.assertIn("undefined Markdown reference", joined)
+
+    def test_documentation_review_metadata_must_be_parseable_and_current(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            readme = root / "README.md"
+
+            def source(reviewed: str, cadence: str) -> str:
+                return (
+                    "# Repository\n\nOwner: @mindclade/developer-platform\n"
+                    f"Last reviewed: {reviewed}\nReview cadence: {cadence}\n\n"
+                    "## Ownership\n\nOwned.\n\n## Activation boundary\n\nSource-only.\n"
+                )
+
+            readme.write_text(source(dt.date.today().isoformat(), "365 days"), encoding="utf-8")
+            self.assertTrue(validator.validate_documentation(root, ["README.md"])["ok"])
+            for reviewed, cadence, expected in (
+                ("not-a-date", "365 days", "ISO YYYY-MM-DD"),
+                ("2000-01-01", "365 days", "stale"),
+                (dt.date.today().isoformat(), "annually", "between 1 and 366 days"),
+            ):
+                with self.subTest(reviewed=reviewed, cadence=cadence):
+                    readme.write_text(source(reviewed, cadence), encoding="utf-8")
+                    errors = validator.validate_documentation(root, ["README.md"])["errors"]
+                    self.assertTrue(any(expected in error for error in errors), errors)
 
     def test_context_marks_fork_pull_requests_as_untrusted(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

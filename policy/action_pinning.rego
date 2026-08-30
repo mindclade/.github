@@ -8,10 +8,15 @@ allowed_actions := {
   "github/codeql-action/analyze": "cdf488f595d80d6e07e03d4674febd5ab45fa938",
   "github/codeql-action/upload-sarif": "cdf488f595d80d6e07e03d4674febd5ab45fa938",
   "actions/dependency-review-action": "a1d282b36b6f3519aa1f3fc636f609c47dddb294",
+  "actions/download-artifact": "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
   "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+  "google-github-actions/auth": "7c6bc770dae815cd3e89ee6cdf493a5fab2cc093", # gitleaks:allow -- immutable public action commit
+  "google-github-actions/setup-gcloud": "aa5489c8933f4cc7a4f7d45035b3b1440c9c10db",
   "ghcr.io/ossf/scorecard-action": "sha256:ae5104dd3cc28466ebeb11144354be4cac4b7ff829654f9fab89021d71c46670",
   "docker://ghcr.io/ossf/scorecard-action": "sha256:ae5104dd3cc28466ebeb11144354be4cac4b7ff829654f9fab89021d71c46670"
 }
+
+self_test_workflow_path := ".github/workflows/self-test.yml"
 
 action_entries := input.actions if {
   is_array(input.actions)
@@ -32,7 +37,7 @@ action_reference(entry) := entry if {
   is_string(entry)
 }
 
-action_path(entry, index) := entry.path if {
+action_path(entry, _) := entry.path if {
   is_object(entry)
   is_string(entry.path)
 }
@@ -46,10 +51,24 @@ action_path(_, index) := sprintf("actions[%d]", [index]) if {
 # composite action below .github/actions and may not contain traversal or an
 # expression interpolation.
 is_implementation_action(reference) if {
+  object.get(input, "workflow_path", "") != self_test_workflow_path
   startswith(reference, "$/.github/actions/")
   not contains(reference, "..")
   not contains(reference, "${{")
   action_path := trim_prefix(reference, "$/.github/actions/")
+  regex.match("^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$", action_path)
+}
+
+# The repository self-test executes from its own exact checkout, so GitHub's
+# native local-action form is both required and safe there. Reusable workflows
+# retain the implementation-action form because their caller checkout is a
+# different trust boundary.
+is_self_test_local_action(reference) if {
+  input.workflow_path == self_test_workflow_path
+  startswith(reference, "./.github/actions/")
+  not contains(reference, "..")
+  not contains(reference, "${{")
+  action_path := trim_prefix(reference, "./.github/actions/")
   regex.match("^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$", action_path)
 }
 
@@ -79,6 +98,10 @@ is_exactly_allowed_action(reference) if {
 
 valid_action_reference(reference) if {
   is_implementation_action(reference)
+}
+
+valid_action_reference(reference) if {
+  is_self_test_local_action(reference)
 }
 
 valid_action_reference(reference) if {

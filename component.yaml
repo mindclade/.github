@@ -14,6 +14,8 @@ spec:
   security_reviewers:
     - security
   repository_class: governance-source
+  trust_tier: trusted
+  recovery_tier: tier-1
   data_classification: internal
   production_authority: false
   dependencies: []

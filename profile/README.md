@@ -1,5 +1,9 @@
 # Organization GitHub profile
 
+Owner: @mindclade/developer-platform
+Last reviewed: 2026-08-30
+Review cadence: 365 days
+
 This directory contains organization-profile source that is safe to review in this repository. It is pre-production source, not evidence that an organization setting or external integration is live.
 
 ## Activation boundary

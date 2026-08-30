@@ -6,7 +6,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-
+from unittest import mock
 import emit_ci_evidence as evidence
 import validate_reusable_workflows as validator
 
@@ -35,7 +35,7 @@ class DeclaredPermissionsTest(unittest.TestCase):
             violations = validator.validate_permissions(root)["errors"]
             self.assertTrue(any("contents must be read" in violation for violation in violations))
             self.assertTrue(any("unapproved permission scope issues" in violation for violation in violations))
-            self.assertTrue(any("id-token permission is forbidden" in violation for violation in violations))
+            self.assertTrue(any("write permission id-token requires" in violation for violation in violations))
             workflow.write_text("on: [pull_request]\npermissions:\n  contents: read\n", encoding="utf-8")
             self.assertTrue(validator.validate_permissions(root)["ok"])
 
@@ -50,6 +50,45 @@ class DeclaredPermissionsTest(unittest.TestCase):
             )
             violations = validator.validate_permissions(root)["errors"]
             self.assertTrue(any("untrusted job cannot request write permission checks" in violation for violation in violations))
+
+    def test_oidc_requires_the_strict_protected_execution_guard(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workflows = root / ".github/workflows"
+            workflows.mkdir(parents=True)
+            workflow = workflows / "tiered.yml"
+            trusted_prepare = (
+                "  prepare:\n"
+                "    runs-on: ubuntu-24.04\n"
+                "    outputs:\n"
+                "      execution_tier: ${{ steps.context.outputs.execution_tier }}\n"
+                "    steps:\n"
+                "      - id: context\n"
+                "        uses: $/.github/actions/validate-trusted-context\n"
+                "        with:\n"
+                "          expected-source-revision: ${{ inputs.source_revision }}\n"
+                "      - uses: $/.github/actions/verify-pinned-actions\n"
+            )
+            protected_archive = (
+                "  archive:\n"
+                "    needs: prepare\n"
+                "    if: needs.prepare.outputs.execution_tier == 'trusted' || needs.prepare.outputs.execution_tier == 'release'\n"
+                "    permissions:\n"
+                "      id-token: write\n"
+            )
+            workflow.write_text(
+                "on: [workflow_call]\npermissions: {}\njobs:\n" + trusted_prepare + protected_archive,
+                encoding="utf-8",
+            )
+            self.assertTrue(validator.validate_permissions(root)["ok"])
+            workflow.write_text(
+                "on: [workflow_call]\npermissions: {}\njobs:\n"
+                + trusted_prepare
+                + protected_archive.replace(" == 'release'", " == 'release' || true"),
+                encoding="utf-8",
+            )
+            violations = validator.validate_permissions(root)["errors"]
+            self.assertTrue(any("write permission id-token requires" in violation for violation in violations))
 
     def test_write_permission_requires_explicit_protected_tier_guard(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -322,6 +361,11 @@ class DeclaredPermissionsTest(unittest.TestCase):
             self.assertEqual("sha256:" + evidence.sha256(context), document["context_digest"])
             document["unexpected"] = "value"
             self.assertIn("$: unexpected property unexpected", evidence.validate_document(document, schema))
+            del document["unexpected"]
+            document["checks"][0]["report_path"] = "reports/01-report.txt"
+            self.assertTrue(any("requires property report_size" in error for error in evidence.validate_document(document, schema)))
+            document["checks"][0]["report_size"] = -1
+            self.assertTrue(any("smaller than minimum" in error for error in evidence.validate_document(document, schema)))
 
     def test_evidence_rejects_non_rfc3339_timestamps(self) -> None:
         schema = ROOT / "schemas/ci_evidence.schema.json"
@@ -368,6 +412,189 @@ class DeclaredPermissionsTest(unittest.TestCase):
                 os.environ.update(old_environment)
             self.assertEqual("sha256:" + evidence.sha256(b"report\x00bytes"), checks[0]["report_digest"])
             self.assertFalse(outside_is_safe)
+
+    def test_reports_are_snapshotted_before_hashing_and_upload(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            runner_temp = root / "runner"
+            workspace.mkdir()
+            runner_temp.mkdir()
+            report = workspace / "report.txt"
+            report.write_bytes(b"approved bytes")
+            old_environment = os.environ.copy()
+            try:
+                os.environ["GITHUB_WORKSPACE"] = str(workspace)
+                os.environ["RUNNER_TEMP"] = str(runner_temp)
+                staged = evidence.stage_reports(str(report), runner_temp / "staging")
+                report.write_bytes(b"mutated after staging")
+                args = argparse.Namespace(report_paths=str(staged[0]), artifact_name="report", conclusion="PASS", checks=None, checks_path=None)
+                checks = evidence.checks_from_args(args)
+            finally:
+                os.environ.clear()
+                os.environ.update(old_environment)
+            self.assertEqual(b"approved bytes", staged[0].read_bytes())
+            self.assertEqual("sha256:" + evidence.sha256(b"approved bytes"), checks[0]["report_digest"])
+            self.assertEqual(0o400, staged[0].stat().st_mode & 0o777)
+
+    def test_downloaded_artifact_verifier_binds_complete_report_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            runner_temp = root / "runner"
+            workspace.mkdir()
+            runner_temp.mkdir()
+            source_report = workspace / "report.txt"
+            source_report.write_bytes(b"approved report bytes")
+            old_environment = os.environ.copy()
+            try:
+                os.environ["GITHUB_WORKSPACE"] = str(workspace)
+                os.environ["RUNNER_TEMP"] = str(runner_temp)
+                artifact = runner_temp / "artifact"
+                staged = evidence.stage_reports(str(source_report), artifact)
+                context = {
+                    "correlation_id": "correlation",
+                    "source_revision": "a" * 40,
+                    "base_revision": "b" * 40,
+                    "repository": "mindclade/.github",
+                    "workflow_ref": ".github/workflows/self-test.yml",
+                    "workflow_revision": "c" * 40,
+                }
+                args = argparse.Namespace(
+                    context=None,
+                    context_json=json.dumps(context),
+                    checks=None,
+                    checks_path=None,
+                    report_paths=str(staged[0]),
+                    artifact_name="self-test",
+                    schema_version="1.0.0",
+                    context_digest=None,
+                    caller_repository=None,
+                    pipeline_definition_revision="d" * 40,
+                    producer="github_actions",
+                    plan_id="plan-001",
+                    build_id="build-001",
+                    conclusion="success",
+                    reason_code="accepted",
+                    started_at="2026-01-01T00:00:00Z",
+                    completed_at="2026-01-01T00:00:01Z",
+                )
+                document = evidence.build_evidence(args)
+                evidence.write_json(artifact / "ci-evidence.json", document)
+                digest = "sha256:" + evidence.sha256(evidence.canonical_json(document))
+                verified = evidence.verify_artifact_directory(
+                    artifact,
+                    expected_evidence_digest=digest,
+                    expected_source_revision="a" * 40,
+                )
+                self.assertEqual(1, verified["report_count"])
+                self.assertEqual(len(b"approved report bytes"), verified["report_bytes"])
+
+                extra = artifact / "unexpected.txt"
+                extra.write_text("unexpected", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "file set mismatch"):
+                    evidence.verify_artifact_directory(artifact)
+                extra.unlink()
+
+                staged[0].chmod(0o600)
+                staged[0].write_bytes(b"mutated report bytes")
+                with self.assertRaisesRegex(ValueError, "report (size|digest) mismatch"):
+                    evidence.verify_artifact_directory(artifact)
+
+                staged[0].write_bytes(b"approved report bytes")
+                document["checks"][0]["report_size"] += 1
+                evidence.write_json(artifact / "ci-evidence.json", document)
+                with self.assertRaisesRegex(ValueError, "report size mismatch"):
+                    evidence.verify_artifact_directory(artifact)
+
+                document["checks"][0]["report_size"] -= 1
+                evidence.write_json(artifact / "ci-evidence.json", document)
+                staged[0].unlink()
+                staged[0].symlink_to(source_report)
+                with self.assertRaisesRegex(ValueError, "non-symlink regular file"):
+                    evidence.verify_artifact_directory(artifact)
+            finally:
+                os.environ.clear()
+                os.environ.update(old_environment)
+
+    def test_report_staging_rejects_symlinks_duplicates_and_size_overflow(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            workspace = root / "workspace"
+            runner_temp = root / "runner"
+            workspace.mkdir()
+            runner_temp.mkdir()
+            report = workspace / "report.txt"
+            report.write_bytes(b"12345")
+            symlink = workspace / "report-link.txt"
+            symlink.symlink_to(report)
+            symlink_directory = workspace / "linked-directory"
+            real_directory = workspace / "real-directory"
+            real_directory.mkdir()
+            nested_report = real_directory / "nested-report.txt"
+            nested_report.write_bytes(b"nested")
+            symlink_directory.symlink_to(real_directory, target_is_directory=True)
+            old_environment = os.environ.copy()
+            try:
+                os.environ["GITHUB_WORKSPACE"] = str(workspace)
+                os.environ["RUNNER_TEMP"] = str(runner_temp)
+                with self.assertRaisesRegex(ValueError, "symlinks"):
+                    evidence.stage_reports(str(symlink), runner_temp / "symlink-staging")
+                with self.assertRaisesRegex(ValueError, "symlinks"):
+                    evidence.stage_reports(str(symlink_directory / nested_report.name), runner_temp / "ancestor-symlink-staging")
+                with self.assertRaisesRegex(ValueError, "duplicate"):
+                    evidence.stage_reports(f"{report}\n{report}", runner_temp / "duplicate-staging")
+                with mock.patch.object(evidence, "MAX_REPORT_BYTES", 4):
+                    with self.assertRaisesRegex(ValueError, "per-file limit"):
+                        evidence.stage_reports(str(report), runner_temp / "size-staging")
+            finally:
+                os.environ.clear()
+                os.environ.update(old_environment)
+
+    def test_publish_action_uploads_only_the_private_staging_directory(self) -> None:
+        action = (ROOT / ".github/actions/publish-ci-evidence/action.yml").read_text(encoding="utf-8")
+        upload = action.split("    - id: upload\n", 1)[1].split("    - id: reference\n", 1)[0]
+        self.assertIn("path: ${{ steps.emit.outputs.artifact_path }}", upload)
+        self.assertNotIn("inputs.report-paths", upload)
+        self.assertIn("artifact-ids: ${{ steps.upload.outputs.artifact-id }}", action)
+        self.assertIn("verify-artifact", action)
+        self.assertLess(action.index("Download the exact immutable artifact"), action.index("Bind artifact reference"))
+        self.assertIn("artifact_digest=%s", action)
+        self.assertIn("?evidence_digest=%s&artifact_digest=%s", action)
+
+    def test_gcs_archiver_is_create_only_and_does_not_require_object_read_access(self) -> None:
+        workflow = (ROOT / ".github/workflows/reusable-required-check.yml").read_text(encoding="utf-8")
+        archive = workflow.split("  archive:\n", 1)[1]
+        self.assertIn("--if-generation-match=0", archive)
+        self.assertIn("--print-created-message", archive)
+        self.assertIn("archive_ref=", archive)
+        self.assertNotIn("storage objects describe", archive)
+
+    def test_archive_handoff_is_exact_shape_and_validated_before_oidc(self) -> None:
+        source = (ROOT / ".github/workflows/reusable-required-check.yml").read_text(encoding="utf-8")
+        validation_position = source.index("      - name: Validate archive activation inputs")
+        verification_position = source.index("      - name: Reverify every downloaded evidence byte before OIDC")
+        oidc_position = source.index("        uses: google-github-actions/auth@")
+        self.assertLess(validation_position, oidc_position)
+        self.assertLess(verification_position, oidc_position)
+        self.assertIn("verify-artifact", source)
+        for assertion in validator.ARCHIVE_HANDOFF_ASSERTIONS:
+            self.assertIn(assertion, source)
+
+        substitutions = (
+            ("github-ci-evidence/providers/writer$", "github-ci-evidence/providers/substitute$"),
+            ("^ci-evidence-writer@", "^substitute-writer@"),
+            ("-production-ci-evidence$", "-staging-ci-evidence$"),
+        )
+        for approved, substitute in substitutions:
+            with self.subTest(substitute=substitute), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                workflow = root / ".github/workflows/reusable-required-check.yml"
+                workflow.parent.mkdir(parents=True)
+                workflow.write_text(source.replace(approved, substitute, 1), encoding="utf-8")
+                outcome = validator.validate_workflows(root)
+                self.assertFalse(outcome["ok"])
+                self.assertTrue(any("archive activation" in error for error in outcome["errors"]), outcome["errors"])
 
 
 if __name__ == "__main__":

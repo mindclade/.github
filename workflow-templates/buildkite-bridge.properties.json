@@ -1,4 +1,4 @@
 {
   "name": "Mindclade Buildkite bridge",
-  "description": "Dispatch and verify the isolated Mindclade presubmit pipeline."
+  "description": "Classify PR and merge-queue trust, run secretless fork checks, and dispatch trusted or protected work to Buildkite."
 }

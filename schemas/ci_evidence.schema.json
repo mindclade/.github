@@ -50,10 +50,16 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["name", "conclusion", "report_digest"],
+      "dependentRequired": {
+        "report_path": ["report_size"],
+        "report_size": ["report_path"]
+      },
       "properties": {
         "name": { "type": "string", "minLength": 1, "maxLength": 255 },
         "conclusion": { "enum": ["PASS", "FAIL", "CANNOT_EVALUATE"] },
-        "report_digest": { "$ref": "#/$defs/sha256Digest" }
+        "report_digest": { "$ref": "#/$defs/sha256Digest" },
+        "report_path": { "type": "string", "pattern": "^reports/[A-Za-z0-9._-]+$" },
+        "report_size": { "type": "integer", "minimum": 0, "maximum": 16777216 }
       }
     }
   }

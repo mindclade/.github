@@ -46,6 +46,10 @@ on:
         description: Immutable evidence artifact reference.
         value: ${{ jobs.dependency_review.outputs.evidence_ref }}
 
+concurrency:
+  group: mindclade-org-dependency-review-${{ github.repository }}
+  cancel-in-progress: true
+
 permissions: {}
 
 jobs:

@@ -5,7 +5,8 @@ workflow checks out caller-controlled code or exposes a secret to an API client.
 
 It permits only:
 
-- `$/` actions from the running workflow's own repository and commit;
+- `$/` actions from a reusable workflow's own repository and commit;
+- `./.github/actions/` in `self-test.yml`, after its exact source checkout;
 - approved GitHub actions and reusable workflows at full 40-character SHAs;
 - container images at full `sha256:` digests.
 
