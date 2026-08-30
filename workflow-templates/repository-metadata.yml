@@ -9,6 +9,6 @@ permissions:
 
 jobs:
   validate:
-    uses: mindclade/.github/.github/workflows/reusable-metadata-validation.yml@3e4924eee71766b696807e0eab9f98d25d82e78d
+    uses: mindclade/.github/.github/workflows/reusable-metadata-validation.yml@defb8afbaac17ed6bb9d3959d185ec9000bd2184
     with:
       source_revision: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}

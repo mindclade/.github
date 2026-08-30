@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   classify:
-    uses: mindclade/.github/.github/workflows/reusable-metadata-validation.yml@3e4924eee71766b696807e0eab9f98d25d82e78d
+    uses: mindclade/.github/.github/workflows/reusable-metadata-validation.yml@defb8afbaac17ed6bb9d3959d185ec9000bd2184
     with:
       source_revision: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
 
@@ -29,7 +29,7 @@ jobs:
       needs.classify.result == 'success' &&
       github.event_name == 'pull_request' &&
       needs.classify.outputs.trust_classification == 'untrusted'
-    uses: mindclade/.github/.github/workflows/reusable-documentation-check.yml@3e4924eee71766b696807e0eab9f98d25d82e78d
+    uses: mindclade/.github/.github/workflows/reusable-documentation-check.yml@defb8afbaac17ed6bb9d3959d185ec9000bd2184
     with:
       source_revision: ${{ github.event.pull_request.head.sha }}
 
@@ -41,7 +41,7 @@ jobs:
         github.event_name != 'pull_request' ||
         needs.classify.outputs.trust_classification == 'trusted'
       )
-    uses: mindclade/.github/.github/workflows/reusable-buildkite-dispatch.yml@3e4924eee71766b696807e0eab9f98d25d82e78d
+    uses: mindclade/.github/.github/workflows/reusable-buildkite-dispatch.yml@defb8afbaac17ed6bb9d3959d185ec9000bd2184
     with:
       source_revision: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
       pipeline_definition_revision: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
@@ -53,7 +53,7 @@ jobs:
   buildkite_required:
     needs: [classify, dispatch]
     if: needs.dispatch.result == 'success'
-    uses: mindclade/.github/.github/workflows/reusable-required-check.yml@3e4924eee71766b696807e0eab9f98d25d82e78d
+    uses: mindclade/.github/.github/workflows/reusable-required-check.yml@defb8afbaac17ed6bb9d3959d185ec9000bd2184
     with:
       source_revision: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
       pipeline_definition_revision: ${{ needs.dispatch.outputs.pipeline_definition_revision }}
