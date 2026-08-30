@@ -378,8 +378,8 @@ class ActionDigestPinningTest(unittest.TestCase):
         self.assertIn("BUILD_ID: ${{ inputs.build_id }}", cancel_step)
         self.assertIn("BUILD_NUMBER: ${{ inputs.build_number }}", cancel_step)
         self.assertIn("BUILDKITE_API_TOKEN: ${{ secrets.buildkite_cancel_token }}", cancel_step)
-        self.assertIn("EXPECTED_SOURCE_REVISION: ${{ inputs.source_revision }}", cancel_step)
-        self.assertIn('--expected-source-revision "${EXPECTED_SOURCE_REVISION}"', cancel_step)
+        self.assertIn("EXPECTED_PIPELINE_DEFINITION_REVISION: ${{ inputs.pipeline_definition_revision }}", cancel_step)
+        self.assertIn('--expected-pipeline-definition-revision "${EXPECTED_PIPELINE_DEFINITION_REVISION}"', cancel_step)
         self.assertIn('if: cancelled() && steps.preflight.outcome == \'success\'', cancel_step)
 
     def test_bound_build_cancellation_verifies_identity_before_mutation(self) -> None:
@@ -792,7 +792,7 @@ class ActionDigestPinningTest(unittest.TestCase):
         old_repository = os.environ.get("GITHUB_REPOSITORY")
         try:
             os.environ["GITHUB_REPOSITORY"] = "mindclade/.github"
-            self.assertEqual([], evidence.buildkite_evidence_binding_errors(document, {"id": BUILD_ID, "number": 7, "commit": SHA}, args))
+            self.assertEqual([], evidence.buildkite_evidence_binding_errors(document, {"id": BUILD_ID, "number": 7, "commit": "e" * 40}, args))
             document["producer"] = "github_actions"
             document["checks"][0]["conclusion"] = "FAIL"
             errors = evidence.buildkite_evidence_binding_errors(document, {"id": BUILD_ID, "number": 7, "commit": SHA}, args)
@@ -803,6 +803,7 @@ class ActionDigestPinningTest(unittest.TestCase):
                 os.environ["GITHUB_REPOSITORY"] = old_repository
         self.assertIn("ci-evidence.json producer is not buildkite", errors)
         self.assertIn("ci-evidence.json contains a non-PASS check", errors)
+        self.assertIn("Buildkite response commit mismatch", errors)
 
     def test_mismatched_evidence_is_rejected_by_schema(self) -> None:
         schema = {

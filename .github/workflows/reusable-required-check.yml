@@ -201,7 +201,7 @@ jobs:
           BUILDKITE_PIPELINE: ${{ secrets.buildkite_pipeline }}
           CONTEXT_DIGEST: ${{ inputs.context_digest }}
           CORRELATION_ID: ${{ inputs.correlation_id }}
-          EXPECTED_SOURCE_REVISION: ${{ inputs.source_revision }}
+          EXPECTED_PIPELINE_DEFINITION_REVISION: ${{ inputs.pipeline_definition_revision }}
           IMPLEMENTATION_ROOT: ${{ steps.context.outputs.implementation_root }}
           PIPELINE_DEFINITION_REVISION: ${{ inputs.pipeline_definition_revision }}
           TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
@@ -233,13 +233,13 @@ jobs:
           set -euo pipefail
           [[ "${BUILD_ID}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]
           [[ "${BUILD_NUMBER}" =~ ^[1-9][0-9]*$ ]]
-          [[ "${EXPECTED_SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${EXPECTED_PIPELINE_DEFINITION_REVISION}" =~ ^[0-9a-f]{40}$ ]]
           [[ -n "${BUILDKITE_API_TOKEN}" && -n "${BUILDKITE_PIPELINE}" ]]
           python3 "${IMPLEMENTATION_ROOT}/tools/emit_ci_evidence.py" buildkite-cancel \
             --pipeline "${BUILDKITE_PIPELINE}" \
             --build-id "${BUILD_ID}" \
             --build-number "${BUILD_NUMBER}" \
-            --expected-source-revision "${EXPECTED_SOURCE_REVISION}"
+            --expected-pipeline-definition-revision "${EXPECTED_PIPELINE_DEFINITION_REVISION}"
       - id: result
         name: Normalize required-check result
         if: always()

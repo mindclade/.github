@@ -44,7 +44,6 @@ jobs:
     uses: mindclade/.github/.github/workflows/reusable-buildkite-dispatch.yml@8d3059d5e14e5f7af861ad190e329fa4dac27dfc
     with:
       source_revision: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
-      pipeline_definition_revision: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
       pipeline_class: ${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'presubmit' || github.event_name == 'release' && 'release' || 'protected' }}
     secrets:
       buildkite_dispatch_token: ${{ secrets.MINDCLADE_BUILDKITE_DISPATCH_TOKEN }}

@@ -101,6 +101,28 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                 candidate.write_text(mutation, encoding="utf-8")
                 self.assertFalse(validator.validate_workflows(root)["ok"])
 
+    def test_buildkite_dispatch_resolves_definition_before_candidate_checkout(self) -> None:
+        workflow = ROOT / validator.BUILDKITE_DISPATCH_WORKFLOW_PATH
+        document, parse_error = validator._parsed_yaml(workflow, ROOT)
+        self.assertIsNone(parse_error)
+        self.assertIsInstance(document, dict)
+        self.assertEqual([], validator._buildkite_dispatch_errors(document, Path(validator.BUILDKITE_DISPATCH_WORKFLOW_PATH)))
+
+        source = workflow.read_text(encoding="utf-8")
+        mutations = (
+            source.replace('--commit "${PIPELINE_DEFINITION_REVISION}"', '--commit "${SOURCE_REVISION}"', 1),
+            source.replace('pipeline_definition_revision="${BASE_REVISION}"', 'pipeline_definition_revision="${SOURCE_REVISION}"', 1),
+            source.replace('--expected-pipeline-definition-revision "${PIPELINE_DEFINITION_REVISION}"', '', 1),
+            source.replace('      pipeline_class:\n', '      pipeline_definition_revision:\n        required: true\n        type: string\n      pipeline_class:\n', 1),
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                candidate = root / validator.BUILDKITE_DISPATCH_WORKFLOW_PATH
+                candidate.parent.mkdir(parents=True)
+                candidate.write_text(mutation, encoding="utf-8")
+                self.assertFalse(validator.validate_workflows(root)["ok"])
+
     def test_inventory_rejects_undeclared_executable_sources(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

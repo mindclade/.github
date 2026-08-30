@@ -784,7 +784,7 @@ class BuildkiteClient:
         if isinstance(response_number, bool) or not isinstance(response_number, int) or response_number < 1:
             raise RuntimeError("Buildkite dispatch response has an invalid build id or build number")
         if response.get("commit") != commit:
-            raise RuntimeError("Buildkite dispatch response commit does not match the requested source")
+            raise RuntimeError("Buildkite dispatch response commit does not match the requested pipeline definition")
         return response
 
     def verify(
@@ -947,7 +947,7 @@ def buildkite_evidence_binding_errors(evidence_document: dict[str, Any], respons
         errors.append("Buildkite response build id mismatch")
     if str(response.get("number", "")) != str(args.build_number):
         errors.append("Buildkite response build number mismatch")
-    if response.get("commit") != args.expected_source_revision:
+    if response.get("commit") != args.expected_pipeline_definition_revision:
         errors.append("Buildkite response commit mismatch")
     if evidence_document.get("producer") != "buildkite":
         errors.append("ci-evidence.json producer is not buildkite")
@@ -1020,7 +1020,7 @@ def command_buildkite(args: argparse.Namespace) -> int:
             args.pipeline,
             args.build_id,
             args.build_number,
-            args.expected_source_revision,
+            args.expected_pipeline_definition_revision,
             args.timeout_seconds,
         )
         response_digest = "sha256:" + sha256(response)
@@ -1052,7 +1052,7 @@ def command_buildkite(args: argparse.Namespace) -> int:
             args.pipeline,
             args.build_id,
             args.build_number,
-            args.expected_source_revision,
+            args.expected_pipeline_definition_revision,
         )
     response_digest = "sha256:" + sha256(response)
     write_output(args.github_output, {"build_id": response.get("id", ""), "build_number": response.get("number", ""), "build_state": response.get("state", ""), "build_url": response.get("web_url", ""), "response_digest": response_digest})
@@ -1109,7 +1109,7 @@ def parser() -> argparse.ArgumentParser:
             buildkite.add_argument("--build-id", required=True)
             buildkite.add_argument("--build-number", required=True)
             if name == "buildkite-cancel":
-                buildkite.add_argument("--expected-source-revision")
+                buildkite.add_argument("--expected-pipeline-definition-revision", required=True)
         if name == "buildkite-verify":
             buildkite.add_argument("--timeout-seconds", type=int, default=60)
             buildkite.add_argument("--schema", default=str(ROOT / "schemas/ci_evidence.schema.json"))

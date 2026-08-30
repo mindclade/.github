@@ -7,10 +7,6 @@ on:
         description: Exact caller source commit SHA.
         required: true
         type: string
-      pipeline_definition_revision:
-        description: Exact protected commit that defines the Buildkite pipeline.
-        required: true
-        type: string
       pipeline_class:
         description: Isolated presubmit, protected continuous, or protected release pipeline.
         required: false
@@ -94,7 +90,7 @@ jobs:
       reason_code: ${{ steps.result.outputs.reason_code }}
       evidence_digest: ${{ steps.evidence.outputs.evidence_digest }}
       evidence_ref: ${{ steps.evidence.outputs.evidence_ref }}
-      pipeline_definition_revision: ${{ inputs.pipeline_definition_revision }}
+      pipeline_definition_revision: ${{ steps.definition.outputs.pipeline_definition_revision }}
     steps:
       - id: context
         name: Validate caller context
@@ -106,36 +102,45 @@ jobs:
         name: Verify immutable implementation closure
         continue-on-error: true
         uses: $/.github/actions/verify-pinned-actions
-      - id: preflight
-        name: Bind pipeline and credentials before network access
+      - id: definition
+        name: Resolve immutable pipeline definition
         if: steps.context.outcome == 'success' && steps.pins.outcome == 'success'
         continue-on-error: true
         env:
           BASE_REVISION: ${{ steps.context.outputs.base_revision }}
-          BUILDKITE_PIPELINE: ${{ secrets.buildkite_pipeline }}
-          BUILDKITE_TOKEN: ${{ secrets.buildkite_dispatch_token }}
           EXECUTION_TIER: ${{ steps.context.outputs.execution_tier }}
           PIPELINE_CLASS: ${{ inputs.pipeline_class }}
-          PIPELINE_DEFINITION_REVISION: ${{ inputs.pipeline_definition_revision }}
           SOURCE_REVISION: ${{ inputs.source_revision }}
         run: |
           set -euo pipefail
-          [[ "${PIPELINE_DEFINITION_REVISION}" =~ ^[0-9a-f]{40}$ ]]
-          [[ -n "${BUILDKITE_TOKEN}" && -n "${BUILDKITE_PIPELINE}" ]]
+          [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
           case "${EXECUTION_TIER}:${PIPELINE_CLASS}" in
-            untrusted:presubmit)
-              [[ "${PIPELINE_DEFINITION_REVISION}" == "${BASE_REVISION}" ]]
+            untrusted:presubmit|trusted:presubmit)
+              pipeline_definition_revision="${BASE_REVISION}"
               ;;
-            trusted:protected)
-              [[ "${PIPELINE_DEFINITION_REVISION}" == "${SOURCE_REVISION}" ]]
-              ;;
-            release:release)
-              [[ "${PIPELINE_DEFINITION_REVISION}" == "${SOURCE_REVISION}" ]]
+            trusted:protected|release:release)
+              pipeline_definition_revision="${SOURCE_REVISION}"
               ;;
             *)
               exit 1
               ;;
           esac
+          [[ "${pipeline_definition_revision}" =~ ^[0-9a-f]{40}$ ]]
+          printf 'pipeline_definition_revision=%s\n' "${pipeline_definition_revision}" >> "${GITHUB_OUTPUT}"
+      - id: preflight
+        name: Bind pipeline and credentials before network access
+        if: steps.definition.outcome == 'success'
+        continue-on-error: true
+        env:
+          BUILDKITE_PIPELINE: ${{ secrets.buildkite_pipeline }}
+          BUILDKITE_TOKEN: ${{ secrets.buildkite_dispatch_token }}
+          PIPELINE_DEFINITION_REVISION: ${{ steps.definition.outputs.pipeline_definition_revision }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          set -euo pipefail
+          [[ "${PIPELINE_DEFINITION_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          [[ -n "${BUILDKITE_TOKEN}" && -n "${BUILDKITE_PIPELINE}" ]]
       - id: create
         name: Dispatch isolated Buildkite build
         if: steps.preflight.outcome == 'success'
@@ -151,7 +156,7 @@ jobs:
           EXECUTION_TIER: ${{ steps.context.outputs.execution_tier }}
           IMPLEMENTATION_ROOT: ${{ steps.context.outputs.implementation_root }}
           PIPELINE_CLASS: ${{ inputs.pipeline_class }}
-          PIPELINE_DEFINITION_REVISION: ${{ inputs.pipeline_definition_revision }}
+          PIPELINE_DEFINITION_REVISION: ${{ steps.definition.outputs.pipeline_definition_revision }}
           SOURCE_REVISION: ${{ inputs.source_revision }}
           SOURCE_TRUST: ${{ steps.context.outputs.source_trust }}
         run: |
@@ -173,7 +178,7 @@ jobs:
           branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
           python3 "${IMPLEMENTATION_ROOT}/tools/emit_ci_evidence.py" buildkite-dispatch \
             --pipeline "${BUILDKITE_PIPELINE}" \
-            --commit "${SOURCE_REVISION}" \
+            --commit "${PIPELINE_DEFINITION_REVISION}" \
             --branch "${branch}" \
             --message "Mindclade ${PIPELINE_CLASS} ${CORRELATION_ID}" \
             --env-json "${env_json}" \
@@ -189,12 +194,14 @@ jobs:
           BUILD_ID: ${{ steps.create.outputs.build_id }}
           BUILD_NUMBER: ${{ steps.create.outputs.build_number }}
           IMPLEMENTATION_ROOT: ${{ steps.context.outputs.implementation_root }}
+          PIPELINE_DEFINITION_REVISION: ${{ steps.definition.outputs.pipeline_definition_revision }}
         run: |
           set -euo pipefail
           python3 "${IMPLEMENTATION_ROOT}/tools/emit_ci_evidence.py" buildkite-cancel \
             --pipeline "${BUILDKITE_PIPELINE}" \
             --build-id "${BUILD_ID}" \
-            --build-number "${BUILD_NUMBER}"
+            --build-number "${BUILD_NUMBER}" \
+            --expected-pipeline-definition-revision "${PIPELINE_DEFINITION_REVISION}"
       - id: result
         name: Normalize dispatch result
         if: always()
@@ -202,6 +209,7 @@ jobs:
           CONTEXT_OUTCOME: ${{ steps.context.outcome }}
           CONTEXT_REASON: ${{ steps.context.outputs.reason_code }}
           CREATE_OUTCOME: ${{ steps.create.outcome }}
+          DEFINITION_OUTCOME: ${{ steps.definition.outcome }}
           PINS_OUTCOME: ${{ steps.pins.outcome }}
           PINS_REASON: ${{ steps.pins.outputs.reason_code }}
           PREFLIGHT_OUTCOME: ${{ steps.preflight.outcome }}
@@ -215,6 +223,9 @@ jobs:
           elif [[ "${PINS_OUTCOME}" != success ]]; then
             conclusion=failure
             reason="${PINS_REASON:-PIN_POLICY_FAILED}"
+          elif [[ "${DEFINITION_OUTCOME}" != success ]]; then
+            conclusion=action_required
+            reason=PIPELINE_DEFINITION_INVALID
           elif [[ "${PREFLIGHT_OUTCOME}" != success ]]; then
             conclusion=action_required
             reason=BUILDKITE_PREFLIGHT_FAILED
@@ -235,7 +246,7 @@ jobs:
           reason-code: ${{ steps.result.outputs.reason_code }}
           plan-id: buildkite-${{ inputs.pipeline_class }}-v1
           build-id: ${{ steps.create.outputs.build_id || github.run_id }}
-          pipeline-definition-revision: ${{ inputs.pipeline_definition_revision }}
+          pipeline-definition-revision: ${{ steps.definition.outputs.pipeline_definition_revision }}
           artifact-name: buildkite-dispatch-evidence-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Enforce dispatch result
         if: always()

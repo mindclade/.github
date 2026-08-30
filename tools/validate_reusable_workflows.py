@@ -26,6 +26,7 @@ SELF_TEST_LOCAL_ACTION = re.compile(
 )
 SELF_TEST_WORKFLOW_PATH = ".github/workflows/self-test.yml"
 REQUIRED_CHECK_WORKFLOW_PATH = ".github/workflows/reusable-required-check.yml"
+BUILDKITE_DISPATCH_WORKFLOW_PATH = ".github/workflows/reusable-buildkite-dispatch.yml"
 BUILDKITE_BRIDGE_TEMPLATE_PATH = "workflow-templates/buildkite-bridge.yml"
 ARCHIVE_HANDOFF_ASSERTIONS = (
     '[[ "${ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]]',
@@ -1189,7 +1190,6 @@ def _buildkite_bridge_errors(document: dict[str, Any], relative: Path) -> list[s
         return [*errors, f"{prefix} every job must be a mapping"]
 
     source_expression = "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}"
-    base_expression = "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}"
     classify_inputs = classify.get("with")
     if classify_inputs != {"source_revision": source_expression}:
         errors.append(f"{prefix} classifier must receive the exact observed PR/merge/source revision")
@@ -1225,10 +1225,9 @@ def _buildkite_bridge_errors(document: dict[str, Any], relative: Path) -> list[s
     expected_pipeline_class = "${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'presubmit' || github.event_name == 'release' && 'release' || 'protected' }}"
     if dispatch_inputs != {
         "source_revision": source_expression,
-        "pipeline_definition_revision": base_expression,
         "pipeline_class": expected_pipeline_class,
     }:
-        errors.append(f"{prefix} dispatch must bind exact source and protected base pipeline revisions")
+        errors.append(f"{prefix} dispatch must pass the exact source revision and let the pinned dispatcher resolve the protected definition")
     dispatch_secrets = dispatch.get("secrets")
     if dispatch_secrets != {
         "buildkite_dispatch_token": "${{ secrets.MINDCLADE_BUILDKITE_DISPATCH_TOKEN }}",
@@ -1309,6 +1308,79 @@ esac"""
     return errors
 
 
+def _buildkite_dispatch_errors(document: dict[str, Any], relative: Path) -> list[str]:
+    if relative.as_posix() != BUILDKITE_DISPATCH_WORKFLOW_PATH:
+        return []
+    prefix = f"{relative}: Buildkite dispatcher"
+    errors: list[str] = []
+    triggers = document.get("on")
+    call = triggers.get("workflow_call") if isinstance(triggers, dict) else None
+    inputs = call.get("inputs") if isinstance(call, dict) else None
+    if not isinstance(inputs, dict):
+        return [f"{prefix} workflow_call inputs must be an explicit mapping"]
+    if "pipeline_definition_revision" in inputs:
+        errors.append(f"{prefix} must derive pipeline_definition_revision instead of accepting caller provenance")
+
+    jobs = document.get("jobs")
+    dispatch = jobs.get("dispatch") if isinstance(jobs, dict) else None
+    steps = dispatch.get("steps") if isinstance(dispatch, dict) else None
+    if not isinstance(steps, list):
+        return [*errors, f"{prefix} dispatch steps must be an explicit list"]
+    by_id = {
+        step.get("id"): step
+        for step in steps
+        if isinstance(step, dict) and isinstance(step.get("id"), str)
+    }
+    required_ids = {"context", "pins", "definition", "preflight", "create", "cancel", "result", "evidence"}
+    if not required_ids.issubset(by_id):
+        errors.append(f"{prefix} must declare the complete immutable definition-launch closure")
+        return errors
+
+    outputs = dispatch.get("outputs")
+    if not isinstance(outputs, dict) or outputs.get("pipeline_definition_revision") != "${{ steps.definition.outputs.pipeline_definition_revision }}":
+        errors.append(f"{prefix} output must expose only the internally resolved definition revision")
+
+    definition = by_id["definition"]
+    expected_definition_env = {
+        "BASE_REVISION": "${{ steps.context.outputs.base_revision }}",
+        "EXECUTION_TIER": "${{ steps.context.outputs.execution_tier }}",
+        "PIPELINE_CLASS": "${{ inputs.pipeline_class }}",
+        "SOURCE_REVISION": "${{ inputs.source_revision }}",
+    }
+    definition_script = definition.get("run")
+    required_definition_fragments = (
+        'untrusted:presubmit|trusted:presubmit)',
+        'pipeline_definition_revision="${BASE_REVISION}"',
+        'trusted:protected|release:release)',
+        'pipeline_definition_revision="${SOURCE_REVISION}"',
+        '[[ "${pipeline_definition_revision}" =~ ^[0-9a-f]{40}$ ]]',
+        "printf 'pipeline_definition_revision=%s\\n'",
+    )
+    if definition.get("env") != expected_definition_env or not isinstance(definition_script, str) or any(fragment not in definition_script for fragment in required_definition_fragments):
+        errors.append(f"{prefix} must resolve the immutable definition from GitHub-observed base/source context")
+
+    create = by_id["create"]
+    create_env = create.get("env")
+    create_script = create.get("run")
+    if not isinstance(create_env, dict) or create_env.get("PIPELINE_DEFINITION_REVISION") != "${{ steps.definition.outputs.pipeline_definition_revision }}":
+        errors.append(f"{prefix} launch must consume the internally resolved definition revision")
+    if not isinstance(create_script, str) or '--commit "${PIPELINE_DEFINITION_REVISION}"' not in create_script or '--commit "${SOURCE_REVISION}"' in create_script:
+        errors.append(f"{prefix} must launch Buildkite at the immutable definition revision before candidate checkout")
+    if not isinstance(create_script, str) or '"PIPELINE_DEFINITION_REVISION", "SOURCE_REVISION"' not in create_script:
+        errors.append(f"{prefix} must pass separate definition and candidate revisions to Buildkite")
+
+    cancel = by_id["cancel"]
+    cancel_script = cancel.get("run")
+    if not isinstance(cancel_script, str) or '--expected-pipeline-definition-revision "${PIPELINE_DEFINITION_REVISION}"' not in cancel_script:
+        errors.append(f"{prefix} cancellation must rebind the build to its immutable definition revision")
+
+    evidence_step = by_id["evidence"]
+    evidence_inputs = evidence_step.get("with")
+    if not isinstance(evidence_inputs, dict) or evidence_inputs.get("pipeline-definition-revision") != "${{ steps.definition.outputs.pipeline_definition_revision }}":
+        errors.append(f"{prefix} evidence must bind the internally resolved definition revision")
+    return errors
+
+
 def validate_workflows(root: Path) -> dict[str, Any]:
     errors: list[str] = []
     workflow_paths = files(root, (".github/workflows/*.yml", ".github/workflows/*.yaml", "workflow-templates/*.yml", "workflow-templates/*.yaml"))
@@ -1327,6 +1399,7 @@ def validate_workflows(root: Path) -> dict[str, Any]:
             errors.extend(_workflow_call_interface_errors(path, document, relative))
         errors.extend(_required_check_archive_errors(document, relative))
         errors.extend(_bounded_concurrency_errors(document, relative))
+        errors.extend(_buildkite_dispatch_errors(document, relative))
         errors.extend(_buildkite_bridge_errors(document, relative))
         for _, key, value in _walk_yaml(document):
             if key == "run" and isinstance(value, str) and _run_uses_caller_inputs(value):
