@@ -133,6 +133,7 @@ EXPECTED_INVENTORY = frozenset(
         ".github/ISSUE_TEMPLATE/architecture-change.yml",
         ".github/ISSUE_TEMPLATE/scientific-correctness.yml",
         ".github/ISSUE_TEMPLATE/config.yml",
+        ".github/actionlint.yaml",
         ".github/CODEOWNERS",
         ".github/dependabot.yml",
         ".github/pull_request_template.md",

@@ -1,0 +1,14 @@
+---
+self-hosted-runner:
+  labels: []
+
+# Reusable workflows use the policy-validated `$/` token to bind composite
+# actions to the reusable workflow's immutable implementation commit. Native
+# CI validates the token and rewrites only its strict form before actionlint;
+# this keeps direct actionlint runs aligned with that same contract.
+paths:
+  .github/workflows/**/*.yml:
+    ignore:
+      - >-
+        specifying action "\$/\.github/actions/[A-Za-z0-9._/-]+"
+        in invalid format because ref is missing
