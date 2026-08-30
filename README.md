@@ -17,6 +17,14 @@ This repository contains the pre-production source for Mindclade organization re
 
 The repository remains pre-production until connected activation is explicitly approved and evidenced. Dependabot checks GitHub Actions and Bazel dependencies weekly. This source defines no dependency auto-merge automation; connected governance must separately enforce the required human reviews.
 
+The repository-local `flake.nix` and `flake.lock` are the sole system-toolchain authority for supported `aarch64-darwin` and `x86_64-linux` hosts. They expose the reviewed `packages.toolchain`, identical default/CI tool closures, formatter, and toolchain/source checks while leaving Bazel and its module graph authoritative for build inputs. From a clean checkout, run:
+
+```bash
+nix build --no-update-lock-file .#toolchain
+nix flake check --no-update-lock-file
+nix develop --no-update-lock-file .#ci --command just ci
+```
+
 The intended fork behavior is source-only until it is exercised from a dedicated consumer repository: pull requests are classified by the pinned metadata workflow, forks run only secretless metadata and documentation checks, and same-repository trusted pull requests plus merge-queue, protected `main`, and release events use the isolated Buildkite path. A stable final gate rejects ambiguous trust, missing secrets, skipped trusted builds, and any unexpected path. The template must not be converted to `pull_request_target` or used to execute fork code with privileged credentials. Do not claim this behavior as connected until a cross-repository canary proves both paths against the approved immutable workflow revision.
 
 ## Evidence retention

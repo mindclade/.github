@@ -12,6 +12,7 @@ allowed_actions := {
   "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
   "google-github-actions/auth": "7c6bc770dae815cd3e89ee6cdf493a5fab2cc093", # gitleaks:allow -- immutable public action commit
   "google-github-actions/setup-gcloud": "aa5489c8933f4cc7a4f7d45035b3b1440c9c10db",
+  "DeterminateSystems/nix-installer-action": "ef8a148080ab6020fd15196c2084a2eea5ff2d25",
   "ghcr.io/ossf/scorecard-action": "sha256:ae5104dd3cc28466ebeb11144354be4cac4b7ff829654f9fab89021d71c46670",
   "docker://ghcr.io/ossf/scorecard-action": "sha256:ae5104dd3cc28466ebeb11144354be4cac4b7ff829654f9fab89021d71c46670"
 }
