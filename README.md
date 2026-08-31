@@ -25,6 +25,10 @@ nix flake check --no-update-lock-file
 nix develop --no-update-lock-file .#ci --command just ci
 ```
 
+The root developer-quality interface is `just format`, `just format-check`,
+`just lint`, and `just check`. Formatting is limited to handwritten source and
+configuration; durable JSON fixtures remain unchanged.
+
 The intended fork behavior is source-only until it is exercised from a dedicated consumer repository: pull requests are classified by the pinned metadata workflow, forks run only secretless metadata and documentation checks, and same-repository trusted pull requests plus merge-queue, protected `main`, and release events use the isolated Buildkite path. The pinned dispatcher derives the protected pipeline-definition SHA from GitHub-observed event context, launches Buildkite at that definition revision, and carries the candidate SHA separately as the code-under-test identity; verification and cancellation bind the Buildkite build commit to the definition SHA while evidence remains bound to the candidate SHA. A stable final gate rejects ambiguous trust, missing or caller-selected definition provenance, missing secrets, skipped trusted builds, and any unexpected path. The template must not be converted to `pull_request_target` or used to execute fork code with privileged credentials. Do not claim this behavior as connected until a cross-repository canary proves both paths against the approved immutable workflow revision.
 
 ## Evidence retention

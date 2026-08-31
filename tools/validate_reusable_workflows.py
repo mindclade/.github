@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pyright: basic, reportArgumentType=false, reportAttributeAccessIssue=false, reportCallIssue=false, reportOperatorIssue=false, reportOptionalMemberAccess=false, reportOptionalSubscript=false
 """Deterministic, stdlib-only validation for this organisation's GitHub assets."""
 
 from __future__ import annotations
@@ -12,9 +13,9 @@ import re
 import subprocess
 import sys
 import urllib.parse
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
-
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -50,7 +51,9 @@ DOCUMENTATION_REQUIRED_HEADINGS = {
     "SUPPORT.md": frozenset({"Source support", "Security support", "Connected requests"}),
     "profile/README.md": frozenset({"Activation boundary"}),
 }
-APPROVED_SCORECARD_WORKFLOW_SHA256 = "bb633c52d5b541d4d4461f61598f81a63265157727cf91a8c27f797e53efe3b4"
+APPROVED_SCORECARD_WORKFLOW_SHA256 = (
+    "bb633c52d5b541d4d4461f61598f81a63265157727cf91a8c27f797e53efe3b4"
+)
 COMMON_WORKFLOW_OUTPUTS = (
     "correlation_id",
     "source_revision",
@@ -64,25 +67,31 @@ COMMON_WORKFLOW_OUTPUTS = (
     "evidence_digest",
     "evidence_ref",
 )
-DERIVED_TRUST_INPUTS = frozenset({
-    "trusted_context",
-    "trust_classification",
-    "execution_tier",
-    "source_trust",
-    "fork",
-    "ref_protected",
-})
+DERIVED_TRUST_INPUTS = frozenset(
+    {
+        "trusted_context",
+        "trust_classification",
+        "execution_tier",
+        "source_trust",
+        "fork",
+        "ref_protected",
+    }
+)
 ALLOWED_INPUT_TYPES = frozenset({"string", "boolean", "number"})
-BUILDKITE_WORKFLOW_PATHS = frozenset({
-    ".github/workflows/reusable-buildkite-dispatch.yml",
-    ".github/workflows/reusable-required-check.yml",
-})
-BUILDKITE_SECRETS = frozenset({
-    "buildkite_cancel_token",
-    "buildkite_dispatch_token",
-    "buildkite_evidence_token",
-    "buildkite_pipeline",
-})
+BUILDKITE_WORKFLOW_PATHS = frozenset(
+    {
+        ".github/workflows/reusable-buildkite-dispatch.yml",
+        ".github/workflows/reusable-required-check.yml",
+    }
+)
+BUILDKITE_SECRETS = frozenset(
+    {
+        "buildkite_cancel_token",
+        "buildkite_dispatch_token",
+        "buildkite_evidence_token",
+        "buildkite_pipeline",
+    }
+)
 ALLOWED_PERMISSIONS = {
     "actions": "read",
     "checks": "write",
@@ -91,13 +100,15 @@ ALLOWED_PERMISSIONS = {
     "pull-requests": "read",
     "security-events": "write",
 }
-PROTECTED_TIER_GUARDS = frozenset({
-    "needs.prepare.outputs.execution_tier == 'trusted' || needs.prepare.outputs.execution_tier == 'release'",
-    "needs.prepare.outputs.execution_tier == 'release' || needs.prepare.outputs.execution_tier == 'trusted'",
-    "needs.prepare.result == 'success' && (needs.prepare.outputs.execution_tier == 'trusted' || needs.prepare.outputs.execution_tier == 'release')",
-    "needs.prepare.result == 'success' && (needs.prepare.outputs.execution_tier == 'release' || needs.prepare.outputs.execution_tier == 'trusted')",
-    "inputs.archive_evidence && needs.required.result == 'success' && (needs.required.outputs.execution_tier == 'trusted' || needs.required.outputs.execution_tier == 'release')",
-})
+PROTECTED_TIER_GUARDS = frozenset(
+    {
+        "needs.prepare.outputs.execution_tier == 'trusted' || needs.prepare.outputs.execution_tier == 'release'",
+        "needs.prepare.outputs.execution_tier == 'release' || needs.prepare.outputs.execution_tier == 'trusted'",
+        "needs.prepare.result == 'success' && (needs.prepare.outputs.execution_tier == 'trusted' || needs.prepare.outputs.execution_tier == 'release')",
+        "needs.prepare.result == 'success' && (needs.prepare.outputs.execution_tier == 'release' || needs.prepare.outputs.execution_tier == 'trusted')",
+        "inputs.archive_evidence && needs.required.result == 'success' && (needs.required.outputs.execution_tier == 'trusted' || needs.required.outputs.execution_tier == 'release')",
+    }
+)
 APPROVED_EXTERNAL_REFERENCES = {
     "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",
     "github/codeql-action/init": "cdf488f595d80d6e07e03d4674febd5ab45fa938",
@@ -168,6 +179,12 @@ EXPECTED_INVENTORY = frozenset(
         "justfile",
         ".editorconfig",
         ".gitignore",
+        ".markdownlint-cli2.yaml",
+        ".pre-commit-config.yaml",
+        ".vscode/extensions.json",
+        ".vscode/settings.json",
+        ".yamllint.yaml",
+        "biome.json",
         "CODE_OF_CONDUCT.md",
         "CONTRIBUTING.md",
         "GOVERNANCE.md",
@@ -175,15 +192,18 @@ EXPECTED_INVENTORY = frozenset(
         "README.md",
         "SECURITY.md",
         "SUPPORT.md",
+        "pyproject.toml",
     }
 )
-IGNORED_INVENTORY_PARTS = frozenset({
-    ".git",
-    ".mypy_cache",
-    ".pytest_cache",
-    ".ruff_cache",
-    "__pycache__",
-})
+IGNORED_INVENTORY_PARTS = frozenset(
+    {
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "__pycache__",
+    }
+)
 
 
 def canonical_json(value: Any) -> str:
@@ -232,7 +252,7 @@ class _CanonicalYAMLParser:
         first = self._next_significant(0)
         if first is None:
             return {}
-        line, content = self._significant(first)
+        line, _content = self._significant(first)
         if line != 0:
             raise CanonicalYAMLError(first + 1, "root content must not be indented")
         value, following = self._parse_block(first, 0, 0)
@@ -246,7 +266,9 @@ class _CanonicalYAMLParser:
             stripped = self.lines[index].strip()
             if stripped and not stripped.startswith("#"):
                 if stripped in {"---", "..."} or stripped.startswith("%"):
-                    raise CanonicalYAMLError(index + 1, "directives and multiple documents are unsupported")
+                    raise CanonicalYAMLError(
+                        index + 1, "directives and multiple documents are unsupported"
+                    )
                 return index
             index += 1
         return None
@@ -292,7 +314,9 @@ class _CanonicalYAMLParser:
             raise CanonicalYAMLError(index + 1, "nesting exceeds 64 levels")
         actual_indent, content = self._significant(index)
         if actual_indent != indent:
-            raise CanonicalYAMLError(index + 1, f"expected indentation {indent}, found {actual_indent}")
+            raise CanonicalYAMLError(
+                index + 1, f"expected indentation {indent}, found {actual_indent}"
+            )
         if content == "-" or content.startswith("- "):
             return self._parse_sequence(index, indent, depth)
         return self._parse_mapping(index, indent, depth)
@@ -307,7 +331,9 @@ class _CanonicalYAMLParser:
             if actual_indent < indent:
                 return mapping, current
             if actual_indent > indent:
-                raise CanonicalYAMLError(current + 1, f"unexpected indentation {actual_indent}; expected {indent}")
+                raise CanonicalYAMLError(
+                    current + 1, f"unexpected indentation {actual_indent}; expected {indent}"
+                )
             if content == "-" or content.startswith("- "):
                 return mapping, current
             key, inline = self._mapping_pair(content, current + 1)
@@ -329,7 +355,9 @@ class _CanonicalYAMLParser:
                 else:
                     child_indent = self._significant(child)[0]
                     if child_indent != indent + 2:
-                        raise CanonicalYAMLError(child + 1, f"nested content must be indented {indent + 2} spaces")
+                        raise CanonicalYAMLError(
+                            child + 1, f"nested content must be indented {indent + 2} spaces"
+                        )
                     value, index = self._parse_block(child, child_indent, depth + 1)
             mapping[key] = value
 
@@ -343,7 +371,9 @@ class _CanonicalYAMLParser:
             if actual_indent < indent:
                 return sequence, current
             if actual_indent > indent:
-                raise CanonicalYAMLError(current + 1, f"unexpected indentation {actual_indent}; expected {indent}")
+                raise CanonicalYAMLError(
+                    current + 1, f"unexpected indentation {actual_indent}; expected {indent}"
+                )
             if content != "-" and not content.startswith("- "):
                 return sequence, current
             inline = content[1:].strip()
@@ -355,7 +385,9 @@ class _CanonicalYAMLParser:
                     continue
                 child_indent = self._significant(child)[0]
                 if child_indent != indent + 2:
-                    raise CanonicalYAMLError(child + 1, f"sequence content must be indented {indent + 2} spaces")
+                    raise CanonicalYAMLError(
+                        child + 1, f"sequence content must be indented {indent + 2} spaces"
+                    )
                 value, index = self._parse_block(child, child_indent, depth + 1)
                 sequence.append(value)
                 continue
@@ -365,7 +397,9 @@ class _CanonicalYAMLParser:
                 index = current + 1
                 child = self._next_significant(index)
                 if child is not None and self._significant(child)[0] > indent:
-                    raise CanonicalYAMLError(child + 1, "scalar sequence item cannot have nested content")
+                    raise CanonicalYAMLError(
+                        child + 1, "scalar sequence item cannot have nested content"
+                    )
                 continue
             key, first_inline = pair
             item: dict[str, Any] = {}
@@ -382,18 +416,24 @@ class _CanonicalYAMLParser:
                 else:
                     child_indent = self._significant(child)[0]
                     if child_indent != indent + 4:
-                        raise CanonicalYAMLError(child + 1, f"nested content must be indented {indent + 4} spaces")
+                        raise CanonicalYAMLError(
+                            child + 1, f"nested content must be indented {indent + 4} spaces"
+                        )
                     value, index = self._parse_block(child, child_indent, depth + 2)
             item[key] = value
             continuation = self._next_significant(index)
             if continuation is not None and self._significant(continuation)[0] > indent:
                 continuation_indent = self._significant(continuation)[0]
                 if continuation_indent != indent + 2:
-                    raise CanonicalYAMLError(continuation + 1, f"sequence mapping must be indented {indent + 2} spaces")
+                    raise CanonicalYAMLError(
+                        continuation + 1, f"sequence mapping must be indented {indent + 2} spaces"
+                    )
                 remainder, index = self._parse_mapping(continuation, indent + 2, depth + 1)
                 duplicates = set(item).intersection(remainder)
                 if duplicates:
-                    raise CanonicalYAMLError(continuation + 1, f"duplicate mapping key {sorted(duplicates)[0]}")
+                    raise CanonicalYAMLError(
+                        continuation + 1, f"duplicate mapping key {sorted(duplicates)[0]}"
+                    )
                 item.update(remainder)
             sequence.append(item)
 
@@ -411,7 +451,10 @@ class _CanonicalYAMLParser:
             if actual_indent <= indent:
                 break
             if actual_indent < content_indent:
-                raise CanonicalYAMLError(index + 1, f"block scalar content must be indented at least {content_indent} spaces")
+                raise CanonicalYAMLError(
+                    index + 1,
+                    f"block scalar content must be indented at least {content_indent} spaces",
+                )
             collected.append(raw[content_indent:])
             index += 1
         if style == ">":
@@ -437,7 +480,7 @@ class _CanonicalYAMLParser:
             raise CanonicalYAMLError(line, "merge keys are unsupported")
         if not self._KEY.fullmatch(key):
             raise CanonicalYAMLError(line, f"unsupported mapping key {key or '<empty>'}")
-        return key, content[colon + 1:].strip()
+        return key, content[colon + 1 :].strip()
 
     @staticmethod
     def _mapping_colon(content: str) -> int:
@@ -519,8 +562,23 @@ class _CanonicalYAMLParser:
                 raise CanonicalYAMLError(line, "double-quoted scalar must decode to a string")
             return decoded
         lowered = token.lower()
-        if lowered in {"null", "true", "false", "yes", "no", "on", "off", ".inf", "+.inf", "-.inf", ".nan"} and token not in {"null", "true", "false"}:
-            raise CanonicalYAMLError(line, f"ambiguous plain scalar {token} must be quoted or use canonical lowercase spelling")
+        if lowered in {
+            "null",
+            "true",
+            "false",
+            "yes",
+            "no",
+            "on",
+            "off",
+            ".inf",
+            "+.inf",
+            "-.inf",
+            ".nan",
+        } and token not in {"null", "true", "false"}:
+            raise CanonicalYAMLError(
+                line,
+                f"ambiguous plain scalar {token} must be quoted or use canonical lowercase spelling",
+            )
         if token in {"null", "~"}:
             return None
         if token == "true":
@@ -529,7 +587,10 @@ class _CanonicalYAMLParser:
             return False
         if re.fullmatch(r"-?(?:0|[1-9][0-9]*)", token):
             return int(token)
-        if re.fullmatch(r"[+-]?(?:[0-9][0-9_]*(?:\.[0-9_]*)?(?:[eE][+-]?[0-9]+)?|0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|\.[0-9_]+)", token):
+        if re.fullmatch(
+            r"[+-]?(?:[0-9][0-9_]*(?:\.[0-9_]*)?(?:[eE][+-]?[0-9]+)?|0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|\.[0-9_]+)",
+            token,
+        ):
             raise CanonicalYAMLError(line, f"unsupported numeric scalar {token}")
         if re.fullmatch(r"[+-]?[0-9][0-9_]*(?::[0-5]?[0-9])+(?:\.[0-9_]*)?", token):
             raise CanonicalYAMLError(line, f"unsupported sexagesimal numeric scalar {token}")
@@ -576,7 +637,9 @@ class _CanonicalYAMLParser:
         if any(not item for item in items):
             raise CanonicalYAMLError(line, "empty flow-sequence items are unsupported")
         if any(self._has_unquoted_colon(item) for item in items):
-            raise CanonicalYAMLError(line, "unquoted colon-bearing flow-sequence items are unsupported")
+            raise CanonicalYAMLError(
+                line, "unquoted colon-bearing flow-sequence items are unsupported"
+            )
         return [self._parse_scalar(item, line) for item in items]
 
 
@@ -683,7 +746,9 @@ def _executable_yaml_paths(root: Path) -> list[Path]:
     )
 
 
-def _walk_yaml(value: Any, path: tuple[str, ...] = ()) -> Iterable[tuple[tuple[str, ...], str, Any]]:
+def _walk_yaml(
+    value: Any, path: tuple[str, ...] = ()
+) -> Iterable[tuple[tuple[str, ...], str, Any]]:
     if isinstance(value, dict):
         for key, child in value.items():
             current = (*path, key)
@@ -714,7 +779,7 @@ def _run_uses_caller_inputs(value: str) -> bool:
             elif character == "'":
                 quoted = True
             elif character == "}" and value[cursor + 1] == "}":
-                if re.search(r"\binputs\b", value[start + 3:cursor], re.IGNORECASE):
+                if re.search(r"\binputs\b", value[start + 3 : cursor], re.IGNORECASE):
                     return True
                 search_from = cursor + 2
                 break
@@ -722,14 +787,16 @@ def _run_uses_caller_inputs(value: str) -> bool:
         else:
             # Malformed expressions are rejected by actionlint; still fail
             # closed if the unterminated tail references caller inputs.
-            return re.search(r"\binputs\b", value[start + 3:], re.IGNORECASE) is not None
+            return re.search(r"\binputs\b", value[start + 3 :], re.IGNORECASE) is not None
 
 
 def _pin_reference_error(relative: Path, reference: Any) -> str | None:
     if not isinstance(reference, str) or not reference:
         return f"{relative}: uses reference must be a non-empty string"
     if reference.startswith("./"):
-        if relative.as_posix() == SELF_TEST_WORKFLOW_PATH and SELF_TEST_LOCAL_ACTION.fullmatch(reference):
+        if relative.as_posix() == SELF_TEST_WORKFLOW_PATH and SELF_TEST_LOCAL_ACTION.fullmatch(
+            reference
+        ):
             return None
         return f"{relative}: caller-checkout local action reference is forbidden: {reference}"
     if reference.startswith("$/"):
@@ -777,20 +844,29 @@ def validate_pins(root: Path) -> dict[str, Any]:
             is_container_reference = (
                 key == "SCORECARD_IMAGE"
                 or key == "container"
-                or key == "image" and ("container" in yaml_path or "services" in yaml_path)
+                or (key == "image" and ("container" in yaml_path or "services" in yaml_path))
             )
             if is_container_reference:
-                reference = value.get("image") if key == "container" and isinstance(value, dict) else value
+                reference = (
+                    value.get("image") if key == "container" and isinstance(value, dict) else value
+                )
                 error = _container_reference_error(relative, reference)
                 if error:
                     errors.append(error)
-            if key == "run" and isinstance(value, str) and re.search(r"\bdocker\b", value, re.IGNORECASE):
+            if (
+                key == "run"
+                and isinstance(value, str)
+                and re.search(r"\bdocker\b", value, re.IGNORECASE)
+            ):
                 approved_scorecard_run = (
                     relative.as_posix() == ".github/workflows/reusable-scorecard.yml"
-                    and hashlib.sha256(path.read_bytes()).hexdigest() == APPROVED_SCORECARD_WORKFLOW_SHA256
+                    and hashlib.sha256(path.read_bytes()).hexdigest()
+                    == APPROVED_SCORECARD_WORKFLOW_SHA256
                 )
                 if not approved_scorecard_run:
-                    errors.append(f"{relative}: direct docker execution must match the approved Scorecard script")
+                    errors.append(
+                        f"{relative}: direct docker execution must match the approved Scorecard script"
+                    )
     return result(not errors, errors, check="pins")
 
 
@@ -809,9 +885,17 @@ def validate_template_pins(root: Path, approved_main_revision: str) -> dict[str,
     """Prove internal template pins exist on approved main and contain their targets."""
     errors: list[str] = []
     if not SHA.fullmatch(approved_main_revision):
-        return result(False, ["approved main revision must be a lowercase 40-character Git SHA"], check="template_pins")
+        return result(
+            False,
+            ["approved main revision must be a lowercase 40-character Git SHA"],
+            check="template_pins",
+        )
     if not _git_object_exists(root, f"{approved_main_revision}^{{commit}}"):
-        return result(False, [f"approved main revision does not exist: {approved_main_revision}"], check="template_pins")
+        return result(
+            False,
+            [f"approved main revision does not exist: {approved_main_revision}"],
+            check="template_pins",
+        )
     internal_references: set[tuple[str, str, str]] = set()
     for path in files(root, ("workflow-templates/*.yml", "workflow-templates/*.yaml")):
         relative = path.relative_to(root)
@@ -846,10 +930,14 @@ def validate_template_pins(root: Path, approved_main_revision: str) -> dict[str,
             continue
         if not _git_object_exists(root, f"{revision}:{repository_path}"):
             errors.append(f"{template}: pinned commit does not contain {repository_path}")
-    return result(not errors, errors, check="template_pins", approved_main_revision=approved_main_revision)
+    return result(
+        not errors, errors, check="template_pins", approved_main_revision=approved_main_revision
+    )
 
 
-def _permission_violations(relative: Path, scope: str, untrusted: bool, protected: bool, value: Any) -> list[str]:
+def _permission_violations(
+    relative: Path, scope: str, untrusted: bool, protected: bool, value: Any
+) -> list[str]:
     prefix = f"{relative}:{scope}"
     if isinstance(value, str) and value in {"read-all", "write-all"}:
         return [f"{prefix}: permissions: {value} is forbidden"]
@@ -866,7 +954,9 @@ def _permission_violations(relative: Path, scope: str, untrusted: bool, protecte
         if untrusted and level == "write":
             errors.append(f"{prefix}: untrusted job cannot request write permission {permission}")
         if level == "write" and (scope == "workflow" or not protected):
-            errors.append(f"{prefix}: write permission {permission} requires an explicit trusted/release execution-tier guard")
+            errors.append(
+                f"{prefix}: write permission {permission} requires an explicit trusted/release execution-tier guard"
+            )
     return errors
 
 
@@ -885,12 +975,17 @@ def _has_trusted_context_producer(document: Any, jobs: Any) -> bool:
     if prepare.get("runs-on") != "ubuntu-24.04" or "env" in prepare or "container" in prepare:
         return False
     outputs = prepare.get("outputs")
-    if not isinstance(outputs, dict) or outputs.get("execution_tier") != "${{ steps.context.outputs.execution_tier }}":
+    if (
+        not isinstance(outputs, dict)
+        or outputs.get("execution_tier") != "${{ steps.context.outputs.execution_tier }}"
+    ):
         return False
     steps = prepare.get("steps")
     if not isinstance(steps, list) or len(steps) < 2:
         return False
-    context_steps = [step for step in steps if isinstance(step, dict) and step.get("id") == "context"]
+    context_steps = [
+        step for step in steps if isinstance(step, dict) and step.get("id") == "context"
+    ]
     if len(context_steps) != 1:
         return False
     context = context_steps[0]
@@ -916,19 +1011,25 @@ def _has_trusted_context_producer(document: Any, jobs: Any) -> bool:
     pins = pin_steps[0]
     if pins is not steps[1]:
         return False
-    if (
+    return not (
         pins.get("continue-on-error", False) is not False
         or "if" in pins
         or "with" in pins
         or "env" in pins
-    ):
-        return False
-    return True
+    )
 
 
 def validate_permissions(root: Path) -> dict[str, Any]:
     errors: list[str] = []
-    paths = files(root, (".github/workflows/*.yml", ".github/workflows/*.yaml", "workflow-templates/*.yml", "workflow-templates/*.yaml"))
+    paths = files(
+        root,
+        (
+            ".github/workflows/*.yml",
+            ".github/workflows/*.yaml",
+            "workflow-templates/*.yml",
+            "workflow-templates/*.yaml",
+        ),
+    )
     for path in paths:
         relative = path.relative_to(root)
         document, parse_error = _parsed_yaml(path, root)
@@ -941,7 +1042,9 @@ def validate_permissions(root: Path) -> dict[str, Any]:
         if "permissions" not in document:
             errors.append(f"{relative}: missing explicit permissions declaration")
         else:
-            errors.extend(_permission_violations(relative, "workflow", False, False, document["permissions"]))
+            errors.extend(
+                _permission_violations(relative, "workflow", False, False, document["permissions"])
+            )
         jobs = document.get("jobs")
         trusted_context_producer = _has_trusted_context_producer(document, jobs)
         valid_paths = {("permissions",)}
@@ -951,7 +1054,8 @@ def validate_permissions(root: Path) -> dict[str, Any]:
                     continue
                 condition = job.get("if") if isinstance(job.get("if"), str) else ""
                 untrusted = job_name == "untrusted" or bool(
-                    "execution_tier" in condition and re.search(r"==\s*['\"]untrusted['\"]", condition)
+                    "execution_tier" in condition
+                    and re.search(r"==\s*['\"]untrusted['\"]", condition)
                 )
                 protected = (
                     "execution_tier" in condition
@@ -959,14 +1063,22 @@ def validate_permissions(root: Path) -> dict[str, Any]:
                     and trusted_context_producer
                 )
                 valid_paths.add(("jobs", job_name, "permissions"))
-                errors.extend(_permission_violations(relative, job_name, untrusted, protected, job["permissions"]))
+                errors.extend(
+                    _permission_violations(
+                        relative, job_name, untrusted, protected, job["permissions"]
+                    )
+                )
         for yaml_path, key, _ in _walk_yaml(document):
             if key == "permissions" and yaml_path not in valid_paths:
-                errors.append(f"{relative}:{'.'.join(yaml_path)}: permissions must be declared at workflow level or directly on a job")
+                errors.append(
+                    f"{relative}:{'.'.join(yaml_path)}: permissions must be declared at workflow level or directly on a job"
+                )
     return result(not errors, errors, check="permissions")
 
 
-def _workflow_call_interface_errors(path: Path, document: dict[str, Any], relative: Path) -> list[str]:
+def _workflow_call_interface_errors(
+    path: Path, document: dict[str, Any], relative: Path
+) -> list[str]:
     triggers = document.get("on")
     call = triggers.get("workflow_call") if isinstance(triggers, dict) else None
     if not isinstance(call, dict):
@@ -995,13 +1107,17 @@ def _workflow_call_interface_errors(path: Path, document: dict[str, Any], relati
             errors.append(f"{relative}: workflow_call input {name} is derived and forbidden")
         previous = input_names_by_casefold.get(folded)
         if previous is not None:
-            errors.append(f"{relative}: workflow_call inputs {previous} and {name} differ only by case")
+            errors.append(
+                f"{relative}: workflow_call inputs {previous} and {name} differ only by case"
+            )
         else:
             input_names_by_casefold[folded] = name
         if not isinstance(definition, dict):
             errors.append(f"{relative}: workflow_call input {name} definition must be a mapping")
         elif definition.get("type") not in ALLOWED_INPUT_TYPES:
-            errors.append(f"{relative}: workflow_call input {name} must declare string, boolean, or number type")
+            errors.append(
+                f"{relative}: workflow_call input {name} must declare string, boolean, or number type"
+            )
 
     outputs = call.get("outputs")
     if not isinstance(outputs, dict):
@@ -1024,13 +1140,19 @@ def _workflow_call_interface_errors(path: Path, document: dict[str, Any], relati
             secrets = {}
         if relative.as_posix() not in BUILDKITE_WORKFLOW_PATHS:
             for name in sorted(secrets):
-                errors.append(f"{relative}: non-Buildkite reusable workflow may not declare secret {name}")
+                errors.append(
+                    f"{relative}: non-Buildkite reusable workflow may not declare secret {name}"
+                )
         else:
             for name in sorted(secrets):
                 if name.casefold() not in BUILDKITE_SECRETS:
-                    errors.append(f"{relative}: Buildkite reusable workflow declares unapproved secret {name}")
+                    errors.append(
+                        f"{relative}: Buildkite reusable workflow declares unapproved secret {name}"
+                    )
                 if not isinstance(secrets[name], dict):
-                    errors.append(f"{relative}: workflow_call secret {name} definition must be a mapping")
+                    errors.append(
+                        f"{relative}: workflow_call secret {name} definition must be a mapping"
+                    )
     return errors
 
 
@@ -1111,7 +1233,9 @@ def _required_check_archive_errors(document: dict[str, Any], relative: Path) -> 
         "cleanup_credentials": True,
     }
     if auth_inputs != expected_auth_inputs:
-        errors.append(f"{prefix} OIDC exchange must consume only the validated writer identity inputs")
+        errors.append(
+            f"{prefix} OIDC exchange must consume only the validated writer identity inputs"
+        )
     return errors
 
 
@@ -1136,13 +1260,27 @@ def _bounded_concurrency_errors(document: dict[str, Any], relative: Path) -> lis
         errors.append(f"{relative}: concurrency group must include github.repository")
     if relative.name.startswith("reusable-"):
         if not isinstance(group, str) or "${{ github.workflow }}" not in group:
-            errors.append(f"{relative}: reusable concurrency group must include the caller github.workflow")
-        if not isinstance(group, str) or "${{ github.event.pull_request.number || github.ref }}" not in group:
-            errors.append(f"{relative}: reusable concurrency group must include its stable pull-request/ref boundary")
+            errors.append(
+                f"{relative}: reusable concurrency group must include the caller github.workflow"
+            )
+        if (
+            not isinstance(group, str)
+            or "${{ github.event.pull_request.number || github.ref }}" not in group
+        ):
+            errors.append(
+                f"{relative}: reusable concurrency group must include its stable pull-request/ref boundary"
+            )
         if isinstance(group, str) and "${{ inputs.source_revision }}" in group:
-            errors.append(f"{relative}: reusable concurrency group must not create a lane per source revision")
-    elif not isinstance(group, str) or "${{ github.event.pull_request.number || github.ref }}" not in group:
-        errors.append(f"{relative}: repository workflow concurrency group must include its stable pull-request/ref boundary")
+            errors.append(
+                f"{relative}: reusable concurrency group must not create a lane per source revision"
+            )
+    elif (
+        not isinstance(group, str)
+        or "${{ github.event.pull_request.number || github.ref }}" not in group
+    ):
+        errors.append(
+            f"{relative}: repository workflow concurrency group must include its stable pull-request/ref boundary"
+        )
     if concurrency.get("cancel-in-progress") is not True:
         errors.append(f"{relative}: concurrency must cancel superseded in-progress runs")
     return errors
@@ -1158,13 +1296,21 @@ def _buildkite_bridge_errors(document: dict[str, Any], relative: Path) -> list[s
         return [f"{prefix} triggers must be an explicit mapping"]
     required_triggers = {"pull_request", "merge_group", "push", "release"}
     if set(triggers) != required_triggers:
-        errors.append(f"{prefix} must declare exactly pull_request, merge_group, push, and release triggers")
+        errors.append(
+            f"{prefix} must declare exactly pull_request, merge_group, push, and release triggers"
+        )
     if "pull_request_target" in triggers:
         errors.append(f"{prefix} must never use pull_request_target")
     if triggers.get("pull_request") is not None or triggers.get("merge_group") is not None:
-        errors.append(f"{prefix} pull_request and merge_group triggers must not carry mutable filters")
-    if triggers.get("push") != {"branches": ["main"]} or triggers.get("release") != {"types": ["published"]}:
-        errors.append(f"{prefix} protected triggers must be exactly main pushes and published releases")
+        errors.append(
+            f"{prefix} pull_request and merge_group triggers must not carry mutable filters"
+        )
+    if triggers.get("push") != {"branches": ["main"]} or triggers.get("release") != {
+        "types": ["published"]
+    }:
+        errors.append(
+            f"{prefix} protected triggers must be exactly main pushes and published releases"
+        )
     if document.get("permissions") != {"contents": "read"}:
         errors.append(f"{prefix} must declare only contents: read at workflow scope")
     concurrency = document.get("concurrency")
@@ -1177,8 +1323,12 @@ def _buildkite_bridge_errors(document: dict[str, Any], relative: Path) -> list[s
             "${{ github.workflow }}",
             "${{ github.event.pull_request.number || github.ref }}",
         )
-        if not isinstance(group, str) or any(dimension not in group for dimension in required_dimensions):
-            errors.append(f"{prefix} concurrency must bind repository, workflow, and stable pull-request/ref identity")
+        if not isinstance(group, str) or any(
+            dimension not in group for dimension in required_dimensions
+        ):
+            errors.append(
+                f"{prefix} concurrency must bind repository, workflow, and stable pull-request/ref identity"
+            )
         if concurrency.get("cancel-in-progress") is not True:
             errors.append(f"{prefix} must cancel superseded runs")
 
@@ -1194,14 +1344,21 @@ def _buildkite_bridge_errors(document: dict[str, Any], relative: Path) -> list[s
     dispatch = jobs["dispatch"]
     buildkite_required = jobs["buildkite_required"]
     gate = jobs["required"]
-    if not all(isinstance(job, dict) for job in (classify, fork_checks, dispatch, buildkite_required, gate)):
+    if not all(
+        isinstance(job, dict) for job in (classify, fork_checks, dispatch, buildkite_required, gate)
+    ):
         return [*errors, f"{prefix} every job must be a mapping"]
 
     source_expression = "${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}"
     classify_inputs = classify.get("with")
     if classify_inputs != {"source_revision": source_expression}:
-        errors.append(f"{prefix} classifier must receive the exact observed PR/merge/source revision")
-    if not isinstance(classify.get("uses"), str) or "reusable-metadata-validation.yml@" not in classify["uses"]:
+        errors.append(
+            f"{prefix} classifier must receive the exact observed PR/merge/source revision"
+        )
+    if (
+        not isinstance(classify.get("uses"), str)
+        or "reusable-metadata-validation.yml@" not in classify["uses"]
+    ):
         errors.append(f"{prefix} classifier must use the pinned metadata workflow")
     if "secrets" in classify:
         errors.append(f"{prefix} classifier must be secretless")
@@ -1211,41 +1368,74 @@ def _buildkite_bridge_errors(document: dict[str, Any], relative: Path) -> list[s
         "needs.classify.result == 'success' && github.event_name == 'pull_request' && "
         "needs.classify.outputs.trust_classification == 'untrusted'"
     )
-    if not isinstance(fork_condition, str) or " ".join(fork_condition.split()) != expected_fork_condition:
-        errors.append(f"{prefix} fork checks must be guarded by successful untrusted-PR classification")
+    if (
+        not isinstance(fork_condition, str)
+        or " ".join(fork_condition.split()) != expected_fork_condition
+    ):
+        errors.append(
+            f"{prefix} fork checks must be guarded by successful untrusted-PR classification"
+        )
     if fork_checks.get("needs") != "classify" or "secrets" in fork_checks:
-        errors.append(f"{prefix} fork checks must depend only on classification and receive no secrets")
-    if not isinstance(fork_checks.get("uses"), str) or "reusable-documentation-check.yml@" not in fork_checks["uses"]:
+        errors.append(
+            f"{prefix} fork checks must depend only on classification and receive no secrets"
+        )
+    if (
+        not isinstance(fork_checks.get("uses"), str)
+        or "reusable-documentation-check.yml@" not in fork_checks["uses"]
+    ):
         errors.append(f"{prefix} fork checks must use the pinned secretless documentation workflow")
     if fork_checks.get("with") != {"source_revision": "${{ github.event.pull_request.head.sha }}"}:
-        errors.append(f"{prefix} fork checks must receive only the observed pull-request head revision")
+        errors.append(
+            f"{prefix} fork checks must receive only the observed pull-request head revision"
+        )
 
     dispatch_condition = dispatch.get("if")
     expected_dispatch_condition = (
         "needs.classify.result == 'success' && ( github.event_name != 'pull_request' || "
         "needs.classify.outputs.trust_classification == 'trusted' )"
     )
-    if not isinstance(dispatch_condition, str) or " ".join(dispatch_condition.split()) != expected_dispatch_condition:
+    if (
+        not isinstance(dispatch_condition, str)
+        or " ".join(dispatch_condition.split()) != expected_dispatch_condition
+    ):
         errors.append(f"{prefix} dispatch must skip every pull request not classified trusted")
-    if dispatch.get("needs") != "classify" or not isinstance(dispatch.get("uses"), str) or "reusable-buildkite-dispatch.yml@" not in dispatch["uses"]:
-        errors.append(f"{prefix} dispatch must depend on classification and use the pinned Buildkite dispatcher")
+    if (
+        dispatch.get("needs") != "classify"
+        or not isinstance(dispatch.get("uses"), str)
+        or "reusable-buildkite-dispatch.yml@" not in dispatch["uses"]
+    ):
+        errors.append(
+            f"{prefix} dispatch must depend on classification and use the pinned Buildkite dispatcher"
+        )
     dispatch_inputs = dispatch.get("with")
     expected_pipeline_class = "${{ (github.event_name == 'pull_request' || github.event_name == 'merge_group') && 'presubmit' || github.event_name == 'release' && 'release' || 'protected' }}"
     if dispatch_inputs != {
         "source_revision": source_expression,
         "pipeline_class": expected_pipeline_class,
     }:
-        errors.append(f"{prefix} dispatch must pass the exact source revision and let the pinned dispatcher resolve the protected definition")
+        errors.append(
+            f"{prefix} dispatch must pass the exact source revision and let the pinned dispatcher resolve the protected definition"
+        )
     dispatch_secrets = dispatch.get("secrets")
     if dispatch_secrets != {
         "buildkite_dispatch_token": "${{ secrets.MINDCLADE_BUILDKITE_DISPATCH_TOKEN }}",
         "buildkite_pipeline": "${{ secrets.MINDCLADE_BUILDKITE_PIPELINE }}",
     }:
-        errors.append(f"{prefix} dispatch must receive only its two explicitly mapped Buildkite secrets")
+        errors.append(
+            f"{prefix} dispatch must receive only its two explicitly mapped Buildkite secrets"
+        )
 
-    if buildkite_required.get("needs") != ["classify", "dispatch"] or buildkite_required.get("if") != "needs.dispatch.result == 'success'":
-        errors.append(f"{prefix} Buildkite verifier must run only after successful classified dispatch")
-    if not isinstance(buildkite_required.get("uses"), str) or "reusable-required-check.yml@" not in buildkite_required["uses"]:
+    if (
+        buildkite_required.get("needs") != ["classify", "dispatch"]
+        or buildkite_required.get("if") != "needs.dispatch.result == 'success'"
+    ):
+        errors.append(
+            f"{prefix} Buildkite verifier must run only after successful classified dispatch"
+        )
+    if (
+        not isinstance(buildkite_required.get("uses"), str)
+        or "reusable-required-check.yml@" not in buildkite_required["uses"]
+    ):
         errors.append(f"{prefix} Buildkite verifier must use the pinned required-check workflow")
     required_inputs = buildkite_required.get("with")
     expected_required_inputs = {
@@ -1264,10 +1454,18 @@ def _buildkite_bridge_errors(document: dict[str, Any], relative: Path) -> list[s
         "buildkite_evidence_token": "${{ secrets.MINDCLADE_BUILDKITE_EVIDENCE_TOKEN }}",
         "buildkite_pipeline": "${{ secrets.MINDCLADE_BUILDKITE_PIPELINE }}",
     }:
-        errors.append(f"{prefix} verifier must receive only its explicitly mapped Buildkite secrets")
+        errors.append(
+            f"{prefix} verifier must receive only its explicitly mapped Buildkite secrets"
+        )
 
-    if gate.get("name") != "Mindclade / Required" or gate.get("if") != "always()" or gate.get("permissions") != {}:
-        errors.append(f"{prefix} final gate must be the always-running permissionless Mindclade / Required context")
+    if (
+        gate.get("name") != "Mindclade / Required"
+        or gate.get("if") != "always()"
+        or gate.get("permissions") != {}
+    ):
+        errors.append(
+            f"{prefix} final gate must be the always-running permissionless Mindclade / Required context"
+        )
     gate_env = gate.get("env")
     expected_gate_env = {
         "BUILDKITE_REQUIRED_RESULT": "${{ needs.buildkite_required.result }}",
@@ -1278,9 +1476,15 @@ def _buildkite_bridge_errors(document: dict[str, Any], relative: Path) -> list[s
         "TRUST_CLASSIFICATION": "${{ needs.classify.outputs.trust_classification }}",
     }
     if gate_env != expected_gate_env:
-        errors.append(f"{prefix} final gate must consume only the exact job-result and trust outputs")
+        errors.append(
+            f"{prefix} final gate must consume only the exact job-result and trust outputs"
+        )
     expected_gate_needs = ["classify", "fork_checks", "dispatch", "buildkite_required"]
-    if gate.get("needs") != expected_gate_needs or gate.get("runs-on") != "ubuntu-24.04" or gate.get("timeout-minutes") != 5:
+    if (
+        gate.get("needs") != expected_gate_needs
+        or gate.get("runs-on") != "ubuntu-24.04"
+        or gate.get("timeout-minutes") != 5
+    ):
         errors.append(f"{prefix} final gate must use the exact bounded dependency closure")
     expected_gate_script = """set -euo pipefail
 [[ "${CLASSIFY_RESULT}" == success ]]
@@ -1312,7 +1516,9 @@ esac"""
         or set(gate_steps[0]) != {"name", "run"}
         or gate_steps[0].get("run", "").strip() != expected_gate_script
     ):
-        errors.append(f"{prefix} final gate script must enforce the exact fork/trusted/protected result matrix")
+        errors.append(
+            f"{prefix} final gate script must enforce the exact fork/trusted/protected result matrix"
+        )
     return errors
 
 
@@ -1327,7 +1533,9 @@ def _buildkite_dispatch_errors(document: dict[str, Any], relative: Path) -> list
     if not isinstance(inputs, dict):
         return [f"{prefix} workflow_call inputs must be an explicit mapping"]
     if "pipeline_definition_revision" in inputs:
-        errors.append(f"{prefix} must derive pipeline_definition_revision instead of accepting caller provenance")
+        errors.append(
+            f"{prefix} must derive pipeline_definition_revision instead of accepting caller provenance"
+        )
 
     jobs = document.get("jobs")
     dispatch = jobs.get("dispatch") if isinstance(jobs, dict) else None
@@ -1339,14 +1547,29 @@ def _buildkite_dispatch_errors(document: dict[str, Any], relative: Path) -> list
         for step in steps
         if isinstance(step, dict) and isinstance(step.get("id"), str)
     }
-    required_ids = {"context", "pins", "definition", "preflight", "create", "cancel", "result", "evidence"}
+    required_ids = {
+        "context",
+        "pins",
+        "definition",
+        "preflight",
+        "create",
+        "cancel",
+        "result",
+        "evidence",
+    }
     if not required_ids.issubset(by_id):
         errors.append(f"{prefix} must declare the complete immutable definition-launch closure")
         return errors
 
     outputs = dispatch.get("outputs")
-    if not isinstance(outputs, dict) or outputs.get("pipeline_definition_revision") != "${{ steps.definition.outputs.pipeline_definition_revision }}":
-        errors.append(f"{prefix} output must expose only the internally resolved definition revision")
+    if (
+        not isinstance(outputs, dict)
+        or outputs.get("pipeline_definition_revision")
+        != "${{ steps.definition.outputs.pipeline_definition_revision }}"
+    ):
+        errors.append(
+            f"{prefix} output must expose only the internally resolved definition revision"
+        )
 
     definition = by_id["definition"]
     expected_definition_env = {
@@ -1357,41 +1580,80 @@ def _buildkite_dispatch_errors(document: dict[str, Any], relative: Path) -> list
     }
     definition_script = definition.get("run")
     required_definition_fragments = (
-        'untrusted:presubmit|trusted:presubmit)',
+        "untrusted:presubmit|trusted:presubmit)",
         'pipeline_definition_revision="${BASE_REVISION}"',
-        'trusted:protected|release:release)',
+        "trusted:protected|release:release)",
         'pipeline_definition_revision="${SOURCE_REVISION}"',
         '[[ "${pipeline_definition_revision}" =~ ^[0-9a-f]{40}$ ]]',
         "printf 'pipeline_definition_revision=%s\\n'",
     )
-    if definition.get("env") != expected_definition_env or not isinstance(definition_script, str) or any(fragment not in definition_script for fragment in required_definition_fragments):
-        errors.append(f"{prefix} must resolve the immutable definition from GitHub-observed base/source context")
+    if (
+        definition.get("env") != expected_definition_env
+        or not isinstance(definition_script, str)
+        or any(fragment not in definition_script for fragment in required_definition_fragments)
+    ):
+        errors.append(
+            f"{prefix} must resolve the immutable definition from GitHub-observed base/source context"
+        )
 
     create = by_id["create"]
     create_env = create.get("env")
     create_script = create.get("run")
-    if not isinstance(create_env, dict) or create_env.get("PIPELINE_DEFINITION_REVISION") != "${{ steps.definition.outputs.pipeline_definition_revision }}":
+    if (
+        not isinstance(create_env, dict)
+        or create_env.get("PIPELINE_DEFINITION_REVISION")
+        != "${{ steps.definition.outputs.pipeline_definition_revision }}"
+    ):
         errors.append(f"{prefix} launch must consume the internally resolved definition revision")
-    if not isinstance(create_script, str) or '--commit "${PIPELINE_DEFINITION_REVISION}"' not in create_script or '--commit "${SOURCE_REVISION}"' in create_script:
-        errors.append(f"{prefix} must launch Buildkite at the immutable definition revision before candidate checkout")
-    if not isinstance(create_script, str) or '"PIPELINE_DEFINITION_REVISION", "SOURCE_REVISION"' not in create_script:
-        errors.append(f"{prefix} must pass separate definition and candidate revisions to Buildkite")
+    if (
+        not isinstance(create_script, str)
+        or '--commit "${PIPELINE_DEFINITION_REVISION}"' not in create_script
+        or '--commit "${SOURCE_REVISION}"' in create_script
+    ):
+        errors.append(
+            f"{prefix} must launch Buildkite at the immutable definition revision before candidate checkout"
+        )
+    if (
+        not isinstance(create_script, str)
+        or '"PIPELINE_DEFINITION_REVISION", "SOURCE_REVISION"' not in create_script
+    ):
+        errors.append(
+            f"{prefix} must pass separate definition and candidate revisions to Buildkite"
+        )
 
     cancel = by_id["cancel"]
     cancel_script = cancel.get("run")
-    if not isinstance(cancel_script, str) or '--expected-pipeline-definition-revision "${PIPELINE_DEFINITION_REVISION}"' not in cancel_script:
-        errors.append(f"{prefix} cancellation must rebind the build to its immutable definition revision")
+    if (
+        not isinstance(cancel_script, str)
+        or '--expected-pipeline-definition-revision "${PIPELINE_DEFINITION_REVISION}"'
+        not in cancel_script
+    ):
+        errors.append(
+            f"{prefix} cancellation must rebind the build to its immutable definition revision"
+        )
 
     evidence_step = by_id["evidence"]
     evidence_inputs = evidence_step.get("with")
-    if not isinstance(evidence_inputs, dict) or evidence_inputs.get("pipeline-definition-revision") != "${{ steps.definition.outputs.pipeline_definition_revision }}":
+    if (
+        not isinstance(evidence_inputs, dict)
+        or evidence_inputs.get("pipeline-definition-revision")
+        != "${{ steps.definition.outputs.pipeline_definition_revision }}"
+    ):
         errors.append(f"{prefix} evidence must bind the internally resolved definition revision")
     return errors
 
 
 def validate_workflows(root: Path) -> dict[str, Any]:
     errors: list[str] = []
-    workflow_paths = files(root, (".github/workflows/*.yml", ".github/workflows/*.yaml", "workflow-templates/*.yml", "workflow-templates/*.yaml"))
+    workflow_paths = files(
+        root,
+        (
+            ".github/workflows/*.yml",
+            ".github/workflows/*.yaml",
+            "workflow-templates/*.yml",
+            "workflow-templates/*.yaml",
+        ),
+    )
     for path in workflow_paths:
         relative = path.relative_to(root)
         document, parse_error = _parsed_yaml(path, root)
@@ -1411,7 +1673,9 @@ def validate_workflows(root: Path) -> dict[str, Any]:
         errors.extend(_buildkite_bridge_errors(document, relative))
         for _, key, value in _walk_yaml(document):
             if key == "run" and isinstance(value, str) and _run_uses_caller_inputs(value):
-                errors.append(f"{relative}: run scripts must receive caller inputs through the environment")
+                errors.append(
+                    f"{relative}: run scripts must receive caller inputs through the environment"
+                )
     action_dir = root / ".github/actions"
     action_paths = (
         sorted({*action_dir.glob("*/action.yml"), *action_dir.glob("*/action.yaml")})
@@ -1437,7 +1701,9 @@ def validate_workflows(root: Path) -> dict[str, Any]:
             errors.append(f"{relative}: composite action missing steps")
         for _, key, value in _walk_yaml(document):
             if key == "run" and isinstance(value, str) and _run_uses_caller_inputs(value):
-                errors.append(f"{relative}: run scripts must receive caller inputs through the environment")
+                errors.append(
+                    f"{relative}: run scripts must receive caller inputs through the environment"
+                )
     return result(not errors, errors, check="workflows")
 
 
@@ -1573,9 +1839,7 @@ def _markdown_errors(path: Path, root: Path) -> list[str]:
     if not re.fullmatch(r"# [^#].+", first):
         errors.append(f"{relative}: first content line must be one H1 title")
     headings = {
-        match.group(1).strip()
-        for line in lines
-        if (match := re.fullmatch(r"## ([^#].+)", line))
+        match.group(1).strip() for line in lines if (match := re.fullmatch(r"## ([^#].+)", line))
     }
     for heading in sorted(DOCUMENTATION_REQUIRED_HEADINGS.get(relative, frozenset())):
         if heading not in headings:
@@ -1609,7 +1873,9 @@ def _complete_metadata_value(value: Any) -> bool:
     return isinstance(value, (bool, int))
 
 
-def validate_metadata(root: Path, component_path: str = "component.yaml", required_files: Iterable[str] = ()) -> dict[str, Any]:
+def validate_metadata(
+    root: Path, component_path: str = "component.yaml", required_files: Iterable[str] = ()
+) -> dict[str, Any]:
     resolved_root = root.resolve()
     component, path_error = _repository_path(resolved_root, component_path)
     if path_error:
@@ -1662,7 +1928,9 @@ def validate_metadata(root: Path, component_path: str = "component.yaml", requir
                 and _complete_metadata_value(dependency)
             )
             if not valid:
-                errors.append(f"{component_path}: spec.dependencies[{index}] must be a non-empty string or mapping with a non-empty component key")
+                errors.append(
+                    f"{component_path}: spec.dependencies[{index}] must be a non-empty string or mapping with a non-empty component key"
+                )
     release = spec.get("release")
     if not isinstance(release, dict):
         errors.append(f"{component_path}: spec.release must be a mapping")
@@ -1682,13 +1950,22 @@ def validate_metadata(root: Path, component_path: str = "component.yaml", requir
         for key in ("artifact", "version"):
             value = release.get(key)
             if value is not None and (not isinstance(value, str) or not value.strip()):
-                errors.append(f"{component_path}: spec.release.{key} must be null or a non-empty string")
+                errors.append(
+                    f"{component_path}: spec.release.{key} must be null or a non-empty string"
+                )
         if not isinstance(release.get("public"), bool):
             errors.append(f"{component_path}: spec.release.public must be a boolean")
         controls = release.get("controls")
-        if not isinstance(controls, list) or any(not isinstance(control, str) or not control.strip() for control in controls):
-            errors.append(f"{component_path}: spec.release.controls must be a list of non-empty strings")
-        if mode != "none" and (not isinstance(release.get("artifact"), str) or not isinstance(release.get("version"), str)):
+        if not isinstance(controls, list) or any(
+            not isinstance(control, str) or not control.strip() for control in controls
+        ):
+            errors.append(
+                f"{component_path}: spec.release.controls must be a list of non-empty strings"
+            )
+        if mode != "none" and (
+            not isinstance(release.get("artifact"), str)
+            or not isinstance(release.get("version"), str)
+        ):
             errors.append(f"{component_path}: an active release must declare artifact and version")
         for key in ("type", "visibility", "dataClassification", "description"):
             value = spec.get(key)
@@ -1704,7 +1981,14 @@ def validate_metadata(root: Path, component_path: str = "component.yaml", requir
 
 
 def validate_documentation(root: Path, documentation_roots: Iterable[str] = ()) -> dict[str, Any]:
-    paths = list(documentation_roots) or ["README.md", "CONTRIBUTING.md", "GOVERNANCE.md", "SECURITY.md", "SUPPORT.md", "profile/README.md"]
+    paths = list(documentation_roots) or [
+        "README.md",
+        "CONTRIBUTING.md",
+        "GOVERNANCE.md",
+        "SECURITY.md",
+        "SUPPORT.md",
+        "profile/README.md",
+    ]
     resolved_root = root.resolve()
     errors: list[str] = []
     for path in paths:
@@ -1792,7 +2076,9 @@ def _nested(payload: dict[str, Any], *keys: str) -> Any:
 
 def _workflow_identity() -> tuple[str, str]:
     reference = os.environ.get("GITHUB_WORKFLOW_REF", "")
-    match = re.search(r"(\.github/workflows/[A-Za-z0-9._-]+\.ya?ml)(?:@([0-9a-f]{40}))?", reference, re.IGNORECASE)
+    match = re.search(
+        r"(\.github/workflows/[A-Za-z0-9._-]+\.ya?ml)(?:@([0-9a-f]{40}))?", reference, re.IGNORECASE
+    )
     workflow_ref = match.group(1) if match else ""
     workflow_revision = match.group(2) if match and match.group(2) else ""
     workflow_sha = os.environ.get("GITHUB_WORKFLOW_SHA", "")
@@ -1803,7 +2089,9 @@ def _workflow_identity() -> tuple[str, str]:
     return workflow_ref, workflow_revision
 
 
-def validate_context_schema(context: dict[str, Any], schema_path: Path = ROOT / "schemas/trusted_context.schema.json") -> list[str]:
+def validate_context_schema(
+    context: dict[str, Any], schema_path: Path = ROOT / "schemas/trusted_context.schema.json"
+) -> list[str]:
     """Validate the fixed trusted-context contract without a runtime dependency."""
     try:
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
@@ -1817,44 +2105,91 @@ def validate_context_schema(context: dict[str, Any], schema_path: Path = ROOT / 
         errors.extend(f"unexpected {key}" for key in context if key not in properties)
     if context.get("schema_version") != "1.0.0":
         errors.append("schema_version must be 1.0.0")
-    if not isinstance(context.get("repository"), str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", context["repository"]):
+    if not isinstance(context.get("repository"), str) or not re.fullmatch(
+        r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", context["repository"]
+    ):
         errors.append("repository is invalid")
-    if not isinstance(context.get("actor"), str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,38}(?:\[bot\])?", context["actor"]):
+    if not isinstance(context.get("actor"), str) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9-]{0,38}(?:\[bot\])?", context["actor"]
+    ):
         errors.append("actor is invalid")
-    if context.get("event_name") not in {"pull_request", "push", "release", "schedule", "workflow_dispatch", "merge_group"}:
+    if context.get("event_name") not in {
+        "pull_request",
+        "push",
+        "release",
+        "schedule",
+        "workflow_dispatch",
+        "merge_group",
+    }:
         errors.append("event_name is invalid")
-    if not isinstance(context.get("ref"), str) or not re.fullmatch(r"refs/(heads|tags)/[A-Za-z0-9._/-]+", context["ref"]):
+    if not isinstance(context.get("ref"), str) or not re.fullmatch(
+        r"refs/(heads|tags)/[A-Za-z0-9._/-]+", context["ref"]
+    ):
         errors.append("ref is invalid")
     for key in ("source_revision", "workflow_revision"):
         if not isinstance(context.get(key), str) or not SHA.fullmatch(context[key]):
             errors.append(f"{key} is not a lowercase SHA")
-    if context.get("base_revision") is not None and (not isinstance(context["base_revision"], str) or not SHA.fullmatch(context["base_revision"])):
+    if context.get("base_revision") is not None and (
+        not isinstance(context["base_revision"], str) or not SHA.fullmatch(context["base_revision"])
+    ):
         errors.append("base_revision is invalid")
-    if not isinstance(context.get("workflow_ref"), str) or not re.fullmatch(r"\.github/workflows/[A-Za-z0-9._-]+\.ya?ml", context["workflow_ref"]):
+    if not isinstance(context.get("workflow_ref"), str) or not re.fullmatch(
+        r"\.github/workflows/[A-Za-z0-9._-]+\.ya?ml", context["workflow_ref"]
+    ):
         errors.append("workflow_ref is invalid")
-    if not isinstance(context.get("fork"), bool) or not isinstance(context.get("ref_protected"), bool):
+    if not isinstance(context.get("fork"), bool) or not isinstance(
+        context.get("ref_protected"), bool
+    ):
         errors.append("fork/ref_protected must be booleans")
     if context.get("source_trust") not in {"untrusted", "trusted", "protected"}:
         errors.append("source_trust is invalid")
     if context.get("execution_tier") not in {"untrusted", "trusted", "release"}:
         errors.append("execution_tier is invalid")
-    if context.get("event_name") in {"pull_request", "merge_group"} and context.get("execution_tier") != "untrusted":
+    if (
+        context.get("event_name") in {"pull_request", "merge_group"}
+        and context.get("execution_tier") != "untrusted"
+    ):
         errors.append("pull_request and merge_group must use untrusted execution tier")
-    if context.get("event_name") == "release":
-        if context.get("execution_tier") != "release" or context.get("source_trust") != "protected" or context.get("fork") or not context.get("ref_protected") or not str(context.get("ref", "")).startswith("refs/tags/"):
-            errors.append("release context does not meet protected release constraints")
+    if context.get("event_name") == "release" and (
+        context.get("execution_tier") != "release"
+        or context.get("source_trust") != "protected"
+        or context.get("fork")
+        or not context.get("ref_protected")
+        or not str(context.get("ref", "")).startswith("refs/tags/")
+    ):
+        errors.append("release context does not meet protected release constraints")
     return errors
 
 
-def trusted_context(event_path: Path, expected_revision: str, allowed_tiers: set[str], implementation_root: Path = ROOT) -> dict[str, Any]:
+def trusted_context(
+    event_path: Path,
+    expected_revision: str,
+    allowed_tiers: set[str],
+    implementation_root: Path = ROOT,
+) -> dict[str, Any]:
     payload = json.loads(event_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("event payload root must be an object")
     event_name = os.environ.get("GITHUB_EVENT_NAME", "")
     release_target = _nested(payload, "release", "target_commitish")
-    release_revision = release_target if isinstance(release_target, str) and SHA.fullmatch(release_target) else None
-    source_revision = _nested(payload, "pull_request", "head", "sha") or _nested(payload, "merge_group", "head_sha") or release_revision or payload.get("after") or os.environ.get("GITHUB_SHA", "")
-    base_revision = _nested(payload, "pull_request", "base", "sha") or _nested(payload, "merge_group", "base_sha") or payload.get("before") or None
+    release_revision = (
+        release_target
+        if isinstance(release_target, str) and SHA.fullmatch(release_target)
+        else None
+    )
+    source_revision = (
+        _nested(payload, "pull_request", "head", "sha")
+        or _nested(payload, "merge_group", "head_sha")
+        or release_revision
+        or payload.get("after")
+        or os.environ.get("GITHUB_SHA", "")
+    )
+    base_revision = (
+        _nested(payload, "pull_request", "base", "sha")
+        or _nested(payload, "merge_group", "base_sha")
+        or payload.get("before")
+        or None
+    )
     fork_provenance_ambiguous = False
     if event_name == "pull_request":
         head_repository = _nested(payload, "pull_request", "head", "repo")
@@ -1871,7 +2206,11 @@ def trusted_context(event_path: Path, expected_revision: str, allowed_tiers: set
         fork = False
     head_ref = _nested(payload, "pull_request", "head", "ref")
     context_ref = os.environ.get("GITHUB_REF", "")
-    if event_name == "pull_request" and isinstance(head_ref, str) and re.fullmatch(r"[A-Za-z0-9._/-]+", head_ref):
+    if (
+        event_name == "pull_request"
+        and isinstance(head_ref, str)
+        and re.fullmatch(r"[A-Za-z0-9._/-]+", head_ref)
+    ):
         context_ref = "refs/heads/" + head_ref
     ref_protected = os.environ.get("GITHUB_REF_PROTECTED", "").lower() == "true"
     release = payload.get("release") if isinstance(payload.get("release"), dict) else {}
@@ -1896,7 +2235,13 @@ def trusted_context(event_path: Path, expected_revision: str, allowed_tiers: set
     workflow_ref, workflow_revision = _workflow_identity()
     context = {
         "schema_version": "1.0.0",
-        "correlation_id": digest({"run_id": os.environ.get("GITHUB_RUN_ID", ""), "attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""), "source_revision": source_revision})[:32],
+        "correlation_id": digest(
+            {
+                "run_id": os.environ.get("GITHUB_RUN_ID", ""),
+                "attempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+                "source_revision": source_revision,
+            }
+        )[:32],
         "repository": os.environ.get("GITHUB_REPOSITORY", ""),
         "actor": os.environ.get("GITHUB_ACTOR", ""),
         "event_name": event_name,
@@ -1922,7 +2267,12 @@ def trusted_context(event_path: Path, expected_revision: str, allowed_tiers: set
         verdict, reason_code = "deny", "source_revision_mismatch"
     elif execution_tier not in allowed_tiers:
         verdict, reason_code = "deny", "execution_tier_not_allowed"
-    elif event_name == "release" and (not ref_protected or bool(release.get("prerelease")) or bool(release.get("draft")) or payload.get("action") != "published"):
+    elif event_name == "release" and (
+        not ref_protected
+        or bool(release.get("prerelease"))
+        or bool(release.get("draft"))
+        or payload.get("action") != "published"
+    ):
         verdict, reason_code = "deny", "release_not_published_protected"
     else:
         schema_errors = validate_context_schema(context)
@@ -1943,22 +2293,38 @@ def trusted_context(event_path: Path, expected_revision: str, allowed_tiers: set
 def command_context(args: argparse.Namespace) -> int:
     try:
         allowed = {tier.strip() for tier in args.allowed_execution_tiers.split(",") if tier.strip()}
-        outcome = trusted_context(Path(args.event_path), args.expected_source_revision, allowed, Path(args.implementation_root))
+        outcome = trusted_context(
+            Path(args.event_path),
+            args.expected_source_revision,
+            allowed,
+            Path(args.implementation_root),
+        )
     except (OSError, ValueError, json.JSONDecodeError) as exc:
-        outcome = {"verdict": "deny", "reason_code": "invalid_event_payload", "context": {}, "context_json": "{}", "context_digest": "sha256:" + digest({}), "implementation_root": str(Path(args.implementation_root).resolve()), "error": str(exc)}
+        outcome = {
+            "verdict": "deny",
+            "reason_code": "invalid_event_payload",
+            "context": {},
+            "context_json": "{}",
+            "context_digest": "sha256:" + digest({}),
+            "implementation_root": str(Path(args.implementation_root).resolve()),
+            "error": str(exc),
+        }
     context = outcome["context"]
-    write_output(args.github_output, {
-        "verdict": outcome["verdict"],
-        "reason_code": outcome["reason_code"],
-        "context_json": outcome["context_json"],
-        "context_digest": outcome["context_digest"],
-        "correlation_id": context.get("correlation_id", ""),
-        "source_revision": context.get("source_revision", ""),
-        "base_revision": context.get("base_revision", ""),
-        "source_trust": context.get("source_trust", ""),
-        "execution_tier": context.get("execution_tier", ""),
-        "implementation_root": outcome["implementation_root"],
-    })
+    write_output(
+        args.github_output,
+        {
+            "verdict": outcome["verdict"],
+            "reason_code": outcome["reason_code"],
+            "context_json": outcome["context_json"],
+            "context_digest": outcome["context_digest"],
+            "correlation_id": context.get("correlation_id", ""),
+            "source_revision": context.get("source_revision", ""),
+            "base_revision": context.get("base_revision", ""),
+            "source_trust": context.get("source_trust", ""),
+            "execution_tier": context.get("execution_tier", ""),
+            "implementation_root": outcome["implementation_root"],
+        },
+    )
     print(canonical_json(outcome))
     return 0 if outcome["verdict"] == "allow" else 1
 
@@ -1987,20 +2353,25 @@ def command_validate(args: argparse.Namespace, names: Iterable[str] | None = Non
         outcome = validate(root, names)
         closure_paths = None
     closure_digest = source_closure_digest(root, closure_paths)
-    outcome.update({
-        "verdict": "allow" if outcome["ok"] else "deny",
-        "reason_code": "accepted" if outcome["ok"] else "validation_failed",
-        "closure_digest": closure_digest,
-        "violations_json": canonical_json(outcome["errors"]),
-        "implementation_root": str(Path(args.implementation_root).resolve()),
-    })
-    write_output(args.github_output, {
-        "verdict": outcome["verdict"],
-        "reason_code": outcome["reason_code"],
-        "closure_digest": outcome["closure_digest"],
-        "violations_json": outcome["violations_json"],
-        "implementation_root": outcome["implementation_root"],
-    })
+    outcome.update(
+        {
+            "verdict": "allow" if outcome["ok"] else "deny",
+            "reason_code": "accepted" if outcome["ok"] else "validation_failed",
+            "closure_digest": closure_digest,
+            "violations_json": canonical_json(outcome["errors"]),
+            "implementation_root": str(Path(args.implementation_root).resolve()),
+        }
+    )
+    write_output(
+        args.github_output,
+        {
+            "verdict": outcome["verdict"],
+            "reason_code": outcome["reason_code"],
+            "closure_digest": outcome["closure_digest"],
+            "violations_json": outcome["violations_json"],
+            "implementation_root": outcome["implementation_root"],
+        },
+    )
     print(canonical_json(outcome))
     return 0 if outcome["ok"] else 1
 

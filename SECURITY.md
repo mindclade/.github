@@ -8,7 +8,7 @@ Review cadence: 365 days
 
 This repository is pre-production governance and automation source. Do not publish vulnerabilities, credentials, tokens, private repository details, exploit paths, or sensitive evidence in issues, pull requests, or commits.
 
-Report security concerns privately to engineering@mindclade.com. Include a concise description, affected source path or workflow, safe reproduction information, and redacted evidence. Do not send secrets.
+Report security concerns privately to <engineering@mindclade.com>. Include a concise description, affected source path or workflow, safe reproduction information, and redacted evidence. Do not send secrets.
 
 ## Review and disclosure
 

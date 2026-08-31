@@ -23,6 +23,26 @@
       packages = forAllSystems (
         system: pkgs:
         let
+          biomeTarget =
+            {
+              aarch64-darwin = {
+                asset = "biome-darwin-arm64";
+                hash = "sha256-UA/Ij/QJJe1CKtzKa4o+kFJu6QTSuhCw7eDNBl/KPSs=";
+              };
+              x86_64-linux = {
+                asset = "biome-linux-x64";
+                hash = "sha256-klh/rBAuM8v4qx/bSIT49Ny/ERcln8bezVy1tfXkjmc=";
+              };
+            }
+            .${system};
+          biome = pkgs.runCommand "biome-2.3.11" { } ''
+            install -D -m 0755 ${
+              pkgs.fetchurl {
+                url = "https://github.com/biomejs/biome/releases/download/%40biomejs/biome%402.3.11/${biomeTarget.asset}";
+                inherit (biomeTarget) hash;
+              }
+            } "$out/bin/biome"
+          '';
           opaTarget =
             {
               aarch64-darwin = {
@@ -36,15 +56,18 @@
             }
             .${system};
           opa = pkgs.runCommand "opa-1.20.1" { } ''
-            install -D -m 0755 ${pkgs.fetchurl {
-              url = "https://github.com/open-policy-agent/opa/releases/download/v1.20.1/${opaTarget.asset}";
-              inherit (opaTarget) hash;
-            }} "$out/bin/opa"
+            install -D -m 0755 ${
+              pkgs.fetchurl {
+                url = "https://github.com/open-policy-agent/opa/releases/download/v1.20.1/${opaTarget.asset}";
+                inherit (opaTarget) hash;
+              }
+            } "$out/bin/opa"
           '';
           toolchainPackages = with pkgs; [
             actionlint
             bash
             bazelisk
+            biome
             buildifier
             cacert
             coreutils
@@ -58,11 +81,19 @@
             gzip
             jq
             just
+            markdownlint-cli2
             nixfmt-rfc-style
             nodejs_24
             opa
+            pre-commit
+
+            pyright
+
             python313
+
+            ruff
             shellcheck
+            shfmt
             unzip
             yamllint
             yq-go
@@ -109,30 +140,43 @@
           toolchain = self.packages.${system}.toolchain;
         in
         {
-          toolchain = pkgs.runCommand "mindclade-dot-github-toolchain-check" {
-            nativeBuildInputs = [ toolchain ];
-          } ''
-            set -euo pipefail
-            test "$(actionlint -version)" = "1.7.12"
-            test "$(just --version)" = "just 1.58.0"
-            test "$(opa version --format json | jq -r .version)" = "1.20.1"
-            test "$(python3 -c 'import platform; print(platform.python_version())')" = "3.13.15"
-            test "${pkgs.bazelisk.version}" = "1.29.0"
-            grep -Fq '>=9.2.0' ${self}/MODULE.bazel
-            grep -Fq '<9.3.0' ${self}/MODULE.bazel
-            mkdir -p "$out"
-            printf '%s\n' '${nixpkgs.rev}' > "$out/nixpkgs-revision"
-          '';
+          toolchain =
+            pkgs.runCommand "mindclade-dot-github-toolchain-check"
+              {
+                nativeBuildInputs = [ toolchain ];
+              }
+              ''
+                set -euo pipefail
+                test "$(biome --version)" = "Version: 2.3.11"
+                test "${pkgs.buildifier.version}" = "8.5.1"
+                test "${pkgs.markdownlint-cli2.version}" = "0.23.2"
+                test "$(pre-commit --version)" = "pre-commit 4.5.1"
+                test "$(pyright --version)" = "pyright 1.1.412"
+                test "$(ruff --version)" = "ruff 0.16.4"
+                test "$(shfmt --version)" = "v3.13.1"
+                test "$(actionlint -version)" = "1.7.12"
+                test "$(just --version)" = "just 1.58.0"
+                test "$(opa version --format json | jq -r .version)" = "1.20.1"
+                test "$(python3 -c 'import platform; print(platform.python_version())')" = "3.13.15"
+                test "${pkgs.bazelisk.version}" = "1.29.0"
+                grep -Fq '>=9.2.0' ${self}/MODULE.bazel
+                grep -Fq '<9.3.0' ${self}/MODULE.bazel
+                mkdir -p "$out"
+                printf '%s\n' '${nixpkgs.rev}' > "$out/nixpkgs-revision"
+              '';
 
-          source = pkgs.runCommand "mindclade-dot-github-source-check" {
-            nativeBuildInputs = [ toolchain ];
-          } ''
-            set -euo pipefail
-            export HOME="$TMPDIR/home"
-            mkdir -p "$HOME" "$out"
-            python3 ${self}/tools/validate_reusable_workflows.py validate --root ${self} \
-              > "$out/validation.json"
-          '';
+          source =
+            pkgs.runCommand "mindclade-dot-github-source-check"
+              {
+                nativeBuildInputs = [ toolchain ];
+              }
+              ''
+                set -euo pipefail
+                export HOME="$TMPDIR/home"
+                mkdir -p "$HOME" "$out"
+                python3 ${self}/tools/validate_reusable_workflows.py validate --root ${self} \
+                  > "$out/validation.json"
+              '';
         }
       );
     };

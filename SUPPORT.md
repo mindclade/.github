@@ -10,7 +10,7 @@ For contribution and source questions, open the appropriate issue template after
 
 ## Security support
 
-For security-sensitive matters, do not open a public issue. Contact engineering@mindclade.com as described in [SECURITY.md](SECURITY.md).
+For security-sensitive matters, do not open a public issue. Contact <engineering@mindclade.com> as described in [SECURITY.md](SECURITY.md).
 
 ## Connected requests
 

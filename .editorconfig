@@ -6,10 +6,25 @@ end_of_line = lf
 insert_final_newline = true
 indent_style = space
 indent_size = 2
+max_line_length = 100
 trim_trailing_whitespace = true
 
-[*.md]
-trim_trailing_whitespace = false
+[*.py]
+indent_size = 4
+
+[*.go]
+indent_style = tab
+indent_size = tab
+tab_width = 8
+
+[*.rs]
+indent_style = space
+indent_size = 4
 
 [Makefile]
 indent_style = tab
+indent_size = tab
+
+[*.md]
+max_line_length = off
+trim_trailing_whitespace = false

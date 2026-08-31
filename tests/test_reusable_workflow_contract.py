@@ -1,3 +1,4 @@
+# pyright: basic, reportArgumentType=false, reportAttributeAccessIssue=false, reportCallIssue=false, reportOperatorIssue=false, reportOptionalMemberAccess=false, reportOptionalSubscript=false
 from __future__ import annotations
 
 import datetime as dt
@@ -9,7 +10,6 @@ import unittest
 from pathlib import Path
 
 import validate_reusable_workflows as validator
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SHA = "a" * 40
@@ -48,7 +48,9 @@ class ReusableWorkflowContractTest(unittest.TestCase):
         self.assertEqual(set(validator.ALLOWED_INPUT_TYPES), rego_set("allowed_input_types"))
         self.assertEqual(set(validator.BUILDKITE_SECRETS), rego_set("allowed_buildkite_secrets"))
         path_block = policy.split("buildkite_workflow_paths := {", 1)[1].split("}", 1)[0]
-        self.assertEqual(set(validator.BUILDKITE_WORKFLOW_PATHS), set(re.findall(r'"([^"]+)"', path_block)))
+        self.assertEqual(
+            set(validator.BUILDKITE_WORKFLOW_PATHS), set(re.findall(r'"([^"]+)"', path_block))
+        )
 
     def test_python_and_rego_permission_allowlists_are_identical(self) -> None:
         policy = (ROOT / "policy/workflow_permissions.rego").read_text(encoding="utf-8")
@@ -56,7 +58,10 @@ class ReusableWorkflowContractTest(unittest.TestCase):
         permissions = dict(re.findall(r'^  "([^"]+)": "([^"]+)"(?:,)?$', block, re.MULTILINE))
         self.assertEqual(validator.ALLOWED_PERMISSIONS, permissions)
         guard_block = policy.split("protected_tier_guards := {", 1)[1].split("}\n", 1)[0]
-        self.assertEqual(set(validator.PROTECTED_TIER_GUARDS), set(re.findall(r'^  "([^"]+)"(?:,)?$', guard_block, re.MULTILINE)))
+        self.assertEqual(
+            set(validator.PROTECTED_TIER_GUARDS),
+            set(re.findall(r'^  "([^"]+)"(?:,)?$', guard_block, re.MULTILINE)),
+        )
 
     def test_repository_matches_the_approved_inventory(self) -> None:
         outcome = validator.validate_inventory(ROOT)
@@ -64,7 +69,9 @@ class ReusableWorkflowContractTest(unittest.TestCase):
         self.assertEqual(60, outcome["expected"])
         self.assertIn(".github/actionlint.yaml", validator.EXPECTED_INVENTORY)
         self.assertIn(".github/workflows/self-test.yml", validator.EXPECTED_INVENTORY)
-        self.assertIn("policy/tests/reusable_workflow_interface_test.rego", validator.EXPECTED_INVENTORY)
+        self.assertIn(
+            "policy/tests/reusable_workflow_interface_test.rego", validator.EXPECTED_INVENTORY
+        )
 
     def test_complete_validator_accepts_the_real_repository(self) -> None:
         outcome = validator.validate(ROOT)
@@ -75,7 +82,12 @@ class ReusableWorkflowContractTest(unittest.TestCase):
         document, parse_error = validator._parsed_yaml(template, ROOT)
         self.assertIsNone(parse_error)
         self.assertIsInstance(document, dict)
-        self.assertEqual([], validator._buildkite_bridge_errors(document, Path(validator.BUILDKITE_BRIDGE_TEMPLATE_PATH)))
+        self.assertEqual(
+            [],
+            validator._buildkite_bridge_errors(
+                document, Path(validator.BUILDKITE_BRIDGE_TEMPLATE_PATH)
+            ),
+        )
         self.assertEqual(
             "mindclade-buildkite-bridge-${{ github.repository }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}",
             document["concurrency"]["group"],
@@ -89,10 +101,20 @@ class ReusableWorkflowContractTest(unittest.TestCase):
         source = template.read_text(encoding="utf-8")
         mutations = (
             source.replace("  pull_request:\n", "  pull_request_target:\n", 1),
-            source.replace("needs.classify.outputs.trust_classification == 'trusted'", "needs.classify.outputs.trust_classification == 'untrusted'", 1),
-            source.replace("    uses: mindclade/.github/.github/workflows/reusable-documentation-check.yml@", "    secrets:\n      leaked: ${{ secrets.MINDCLADE_BUILDKITE_PIPELINE }}\n    uses: mindclade/.github/.github/workflows/reusable-documentation-check.yml@", 1),
+            source.replace(
+                "needs.classify.outputs.trust_classification == 'trusted'",
+                "needs.classify.outputs.trust_classification == 'untrusted'",
+                1,
+            ),
+            source.replace(
+                "    uses: mindclade/.github/.github/workflows/reusable-documentation-check.yml@",
+                "    secrets:\n      leaked: ${{ secrets.MINDCLADE_BUILDKITE_PIPELINE }}\n    uses: mindclade/.github/.github/workflows/reusable-documentation-check.yml@",
+                1,
+            ),
             source.replace("-${{ github.workflow }}", "", 1),
-            source.replace("${{ github.event.pull_request.number || github.ref }}", "${{ github.sha }}", 1),
+            source.replace(
+                "${{ github.event.pull_request.number || github.ref }}", "${{ github.sha }}", 1
+            ),
         )
         for mutation in mutations:
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
@@ -107,14 +129,31 @@ class ReusableWorkflowContractTest(unittest.TestCase):
         document, parse_error = validator._parsed_yaml(workflow, ROOT)
         self.assertIsNone(parse_error)
         self.assertIsInstance(document, dict)
-        self.assertEqual([], validator._buildkite_dispatch_errors(document, Path(validator.BUILDKITE_DISPATCH_WORKFLOW_PATH)))
+        self.assertEqual(
+            [],
+            validator._buildkite_dispatch_errors(
+                document, Path(validator.BUILDKITE_DISPATCH_WORKFLOW_PATH)
+            ),
+        )
 
         source = workflow.read_text(encoding="utf-8")
         mutations = (
-            source.replace('--commit "${PIPELINE_DEFINITION_REVISION}"', '--commit "${SOURCE_REVISION}"', 1),
-            source.replace('pipeline_definition_revision="${BASE_REVISION}"', 'pipeline_definition_revision="${SOURCE_REVISION}"', 1),
-            source.replace('--expected-pipeline-definition-revision "${PIPELINE_DEFINITION_REVISION}"', '', 1),
-            source.replace('      pipeline_class:\n', '      pipeline_definition_revision:\n        required: true\n        type: string\n      pipeline_class:\n', 1),
+            source.replace(
+                '--commit "${PIPELINE_DEFINITION_REVISION}"', '--commit "${SOURCE_REVISION}"', 1
+            ),
+            source.replace(
+                'pipeline_definition_revision="${BASE_REVISION}"',
+                'pipeline_definition_revision="${SOURCE_REVISION}"',
+                1,
+            ),
+            source.replace(
+                '--expected-pipeline-definition-revision "${PIPELINE_DEFINITION_REVISION}"', "", 1
+            ),
+            source.replace(
+                "      pipeline_class:\n",
+                "      pipeline_definition_revision:\n        required: true\n        type: string\n      pipeline_class:\n",
+                1,
+            ),
         )
         for mutation in mutations:
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
@@ -147,31 +186,52 @@ class ReusableWorkflowContractTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             event = Path(temporary) / "event.json"
             output = Path(temporary) / "github-output"
-            event.write_text(json.dumps({"pull_request": {"head": {"sha": SHA, "repo": {"fork": False}}, "base": {"sha": "b" * 40}}}), encoding="utf-8")
+            event.write_text(
+                json.dumps(
+                    {
+                        "pull_request": {
+                            "head": {"sha": SHA, "repo": {"fork": False}},
+                            "base": {"sha": "b" * 40},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
             old_environment = os.environ.copy()
             try:
-                os.environ.update({
-                    "GITHUB_EVENT_NAME": "pull_request",
-                    "GITHUB_REPOSITORY": "mindclade/.github",
-                    "GITHUB_ACTOR": "mindclade-bot",
-                    "GITHUB_REF": "refs/heads/main",
-                    "GITHUB_SHA": SHA,
-                    "GITHUB_RUN_ID": "123",
-                    "GITHUB_RUN_ATTEMPT": "1",
-                    "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/reusable-required-check.yml@" + SHA,
-                })
-                exit_code = validator.main([
-                    "context",
-                    "--event-path", str(event),
-                    "--expected-source-revision", SHA,
-                    "--allowed-execution-tiers", "untrusted,trusted",
-                    "--github-output", str(output),
-                ])
+                os.environ.update(
+                    {
+                        "GITHUB_EVENT_NAME": "pull_request",
+                        "GITHUB_REPOSITORY": "mindclade/.github",
+                        "GITHUB_ACTOR": "mindclade-bot",
+                        "GITHUB_REF": "refs/heads/main",
+                        "GITHUB_SHA": SHA,
+                        "GITHUB_RUN_ID": "123",
+                        "GITHUB_RUN_ATTEMPT": "1",
+                        "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/reusable-required-check.yml@"
+                        + SHA,
+                    }
+                )
+                exit_code = validator.main(
+                    [
+                        "context",
+                        "--event-path",
+                        str(event),
+                        "--expected-source-revision",
+                        SHA,
+                        "--allowed-execution-tiers",
+                        "untrusted,trusted",
+                        "--github-output",
+                        str(output),
+                    ]
+                )
             finally:
                 os.environ.clear()
                 os.environ.update(old_environment)
             self.assertEqual(0, exit_code)
-            values = dict(line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines())
+            values = dict(
+                line.split("=", 1) for line in output.read_text(encoding="utf-8").splitlines()
+            )
             self.assertEqual("allow", values["verdict"])
             self.assertEqual("accepted", values["reason_code"])
             self.assertEqual(SHA, values["source_revision"])
@@ -202,7 +262,9 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             root = Path(temporary)
             workflows = root / ".github/workflows"
             workflows.mkdir(parents=True)
-            (workflows / "reusable-required-check.yml").write_text("on: [pull_request]\npermissions: {}\n", encoding="utf-8")
+            (workflows / "reusable-required-check.yml").write_text(
+                "on: [pull_request]\npermissions: {}\n", encoding="utf-8"
+            )
             outcome = validator.validate_workflows(root)
             self.assertFalse(outcome["ok"])
             self.assertIn("reusable workflow must declare workflow_call", outcome["errors"][0])
@@ -259,7 +321,9 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                 errors = validator._bounded_concurrency_errors(document, reusable_path)
                 self.assertTrue(any(expected_error in error for error in errors), errors)
 
-    def test_buildkite_secret_classification_uses_the_repository_path_not_display_name(self) -> None:
+    def test_buildkite_secret_classification_uses_the_repository_path_not_display_name(
+        self,
+    ) -> None:
         secret = "    secrets:\n      buildkite_evidence_token:\n        required: true\n"
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -272,7 +336,9 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             )
             outcome = validator.validate_workflows(root)
             self.assertFalse(outcome["ok"])
-            self.assertTrue(any("non-Buildkite reusable workflow" in error for error in outcome["errors"]))
+            self.assertTrue(
+                any("non-Buildkite reusable workflow" in error for error in outcome["errors"])
+            )
 
             spoof.unlink()
             approved = workflows / "reusable-required-check.yml"
@@ -290,7 +356,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             rejected = (
                 'on: [push]\npermissions: {}\nsteps:\n  - "uses": actions/checkout@main\n',
                 'on: [push]\npermissions: {}\nsteps:\n  - {"uses": actions/checkout@main}\n',
-                'on: [push]\npermissions: {}\nsteps: [uses: actions/checkout@main]\n',
+                "on: [push]\npermissions: {}\nsteps: [uses: actions/checkout@main]\n",
                 "on: [push]\npermissions: {}\nsteps: ['uses': 'actions/checkout@main']\n",
                 "on: [push]\npermissions: {}\nsteps:\n  - uses: &checkout actions/checkout@main\n  - uses: *checkout\n",
                 f"on: [push]\npermissions: {{}}\nsteps:\n  - uses: actions/checkout@{SHA}\n    uses: actions/checkout@main\n",
@@ -302,8 +368,12 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                     workflows = validator.validate_workflows(root)
                     self.assertFalse(pins["ok"])
                     self.assertFalse(workflows["ok"])
-                    self.assertTrue(any("unsupported canonical YAML" in error for error in pins["errors"]))
-                    self.assertTrue(any("unsupported canonical YAML" in error for error in workflows["errors"]))
+                    self.assertTrue(
+                        any("unsupported canonical YAML" in error for error in pins["errors"])
+                    )
+                    self.assertTrue(
+                        any("unsupported canonical YAML" in error for error in workflows["errors"])
+                    )
 
     def test_run_scripts_reject_all_caller_input_expression_spellings(self) -> None:
         expressions = (
@@ -325,12 +395,14 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                 with self.subTest(expression=expression):
                     workflow.write_text(
                         "on: [push]\npermissions: {}\njobs:\n  test:\n    runs-on: ubuntu-24.04\n"
-                        f"    steps:\n      - run: echo \"{expression}\"\n",
+                        f'    steps:\n      - run: echo "{expression}"\n',
                         encoding="utf-8",
                     )
                     outcome = validator.validate_workflows(root)
                     self.assertFalse(outcome["ok"])
-                    self.assertTrue(any("through the environment" in error for error in outcome["errors"]))
+                    self.assertTrue(
+                        any("through the environment" in error for error in outcome["errors"])
+                    )
 
     def test_reusable_workflow_rejects_invalid_source_and_derived_trust_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -363,7 +435,10 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             self.assertIn("workflow_call input execution_tier is derived and forbidden", joined)
             self.assertIn("workflow_call input Execution_Tier is derived and forbidden", joined)
             self.assertIn("workflow_call input source_trust is derived and forbidden", joined)
-            self.assertIn("workflow_call input source_trust must declare string, boolean, or number type", joined)
+            self.assertIn(
+                "workflow_call input source_trust must declare string, boolean, or number type",
+                joined,
+            )
             self.assertIn("differ only by case", joined)
 
     def test_reusable_workflow_rejects_missing_outputs_and_unapproved_secrets(self) -> None:
@@ -375,14 +450,18 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                 reusable_workflow(
                     secrets="    secrets:\n      buildkite_dispatch_token:\n        required: false\n",
                     output_names=validator.COMMON_WORKFLOW_OUTPUTS[:-1],
-                ) + "secrets: inherit\n",
+                )
+                + "secrets: inherit\n",
                 encoding="utf-8",
             )
             outcome = validator.validate_workflows(root)
             self.assertFalse(outcome["ok"])
             joined = "\n".join(outcome["errors"])
             self.assertIn("workflow_call output evidence_ref is required", joined)
-            self.assertIn("non-Buildkite reusable workflow may not declare secret buildkite_dispatch_token", joined)
+            self.assertIn(
+                "non-Buildkite reusable workflow may not declare secret buildkite_dispatch_token",
+                joined,
+            )
             self.assertIn("secrets: inherit is forbidden", joined)
 
     def test_buildkite_reusable_workflow_rejects_unknown_secret(self) -> None:
@@ -408,10 +487,17 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             root = Path(temporary)
             workflows = root / ".github/workflows"
             workflows.mkdir(parents=True)
-            (workflows / "self-test.yml").write_text("on: [push]\npermissions: {}\n", encoding="utf-8")
-            outcome = validator.validate(root, validator.selected_checks("pins,permissions,workflows"))
+            (workflows / "self-test.yml").write_text(
+                "on: [push]\npermissions: {}\n", encoding="utf-8"
+            )
+            outcome = validator.validate(
+                root, validator.selected_checks("pins,permissions,workflows")
+            )
             self.assertTrue(outcome["ok"], outcome["errors"])
-            self.assertEqual(["pins", "permissions", "workflows"], validator.selected_checks("pins,permissions,workflows"))
+            self.assertEqual(
+                ["pins", "permissions", "workflows"],
+                validator.selected_checks("pins,permissions,workflows"),
+            )
             with self.assertRaises(ValueError):
                 validator.selected_checks("pins,,workflows")
             with self.assertRaises(ValueError):
@@ -427,13 +513,17 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                 workflow.write_text("on: [push]\npermissions: {}\n", encoding="utf-8")
             baseline = validator.source_closure_digest(first_root)
             self.assertEqual(baseline, validator.source_closure_digest(second_root))
-            (second_root / ".github/workflows/self-test.yml").write_text("on: [pull_request]\npermissions: {}\n", encoding="utf-8")
+            (second_root / ".github/workflows/self-test.yml").write_text(
+                "on: [pull_request]\npermissions: {}\n", encoding="utf-8"
+            )
             self.assertNotEqual(baseline, validator.source_closure_digest(second_root))
             baseline = validator.source_closure_digest(first_root)
-            (first_root / "MODULE.bazel").write_text("module(name = \"changed\")\n", encoding="utf-8")
+            (first_root / "MODULE.bazel").write_text('module(name = "changed")\n', encoding="utf-8")
             self.assertNotEqual(baseline, validator.source_closure_digest(first_root))
             baseline = validator.source_closure_digest(first_root)
-            (first_root / ".github/workflows/evil.yaml").write_text("on: [push]\npermissions: {}\n", encoding="utf-8")
+            (first_root / ".github/workflows/evil.yaml").write_text(
+                "on: [push]\npermissions: {}\n", encoding="utf-8"
+            )
             self.assertNotEqual(baseline, validator.source_closure_digest(first_root))
 
     def test_selected_source_closure_does_not_hash_unrelated_consumer_files(self) -> None:
@@ -454,7 +544,9 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             root = Path(temporary)
             action = root / ".github/actions/example/action.yml"
             action.parent.mkdir(parents=True)
-            action.write_text("name: Example\ndescription: Example\nruns:\n  using: node20\n", encoding="utf-8")
+            action.write_text(
+                "name: Example\ndescription: Example\nruns:\n  using: node20\n", encoding="utf-8"
+            )
             outcome = validator.validate_workflows(root)
             self.assertFalse(outcome["ok"])
             self.assertIn("action must use the composite runtime", outcome["errors"][0])
@@ -483,7 +575,9 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             component.write_text(valid, encoding="utf-8")
             self.assertTrue(validator.validate_metadata(root)["ok"])
             component.write_text(
-                valid.replace("  dependencies: []", "  dependencies:\n    - component: mindclade/example"),
+                valid.replace(
+                    "  dependencies: []", "  dependencies:\n    - component: mindclade/example"
+                ),
                 encoding="utf-8",
             )
             self.assertTrue(validator.validate_metadata(root)["ok"])
@@ -510,9 +604,13 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             )
             component.write_text(product, encoding="utf-8")
             self.assertTrue(validator.validate_metadata(root)["ok"])
-            component.write_text(product.replace("    mode: none", "    mode: null"), encoding="utf-8")
+            component.write_text(
+                product.replace("    mode: none", "    mode: null"), encoding="utf-8"
+            )
             self.assertFalse(validator.validate_metadata(root)["ok"])
-            component.write_text(product.replace("    mode: none", "    mode: package"), encoding="utf-8")
+            component.write_text(
+                product.replace("    mode: none", "    mode: package"), encoding="utf-8"
+            )
             self.assertFalse(validator.validate_metadata(root)["ok"])
 
             invalid = (
@@ -529,14 +627,27 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                 valid.replace("  dependencies: []", "  dependencies: null"),
                 valid.replace("  dependencies: []", "  dependencies: [NULL]"),
                 valid.replace("  dependencies: []", "  dependencies:\n    - null"),
-                valid.replace("  dependencies: []", "  dependencies:\n    - owner: developer-platform"),
-                valid.replace("  release:\n    strategy: reviewed-main\n    artifact: source-commit\n    immutable: true", "  release: TRUE"),
-                valid.replace("  release:\n    strategy: reviewed-main\n    artifact: source-commit\n    immutable: true", "  release: arbitrary-string"),
-                valid.replace("  release:\n    strategy: reviewed-main\n    artifact: source-commit\n    immutable: true", "  release: {}"),
+                valid.replace(
+                    "  dependencies: []", "  dependencies:\n    - owner: developer-platform"
+                ),
+                valid.replace(
+                    "  release:\n    strategy: reviewed-main\n    artifact: source-commit\n    immutable: true",
+                    "  release: TRUE",
+                ),
+                valid.replace(
+                    "  release:\n    strategy: reviewed-main\n    artifact: source-commit\n    immutable: true",
+                    "  release: arbitrary-string",
+                ),
+                valid.replace(
+                    "  release:\n    strategy: reviewed-main\n    artifact: source-commit\n    immutable: true",
+                    "  release: {}",
+                ),
                 valid.replace("    strategy: reviewed-main", "    nonsense: complete"),
                 valid.replace("    artifact: source-commit\n", ""),
                 valid.replace("    immutable: true", "    immutable: yes-please"),
-                valid.replace("spec:\n  owner: developer-platform", "owner: developer-platform\nspec:"),
+                valid.replace(
+                    "spec:\n  owner: developer-platform", "owner: developer-platform\nspec:"
+                ),
             )
             for source in invalid:
                 with self.subTest(source=source):
@@ -590,8 +701,12 @@ class ReusableWorkflowContractTest(unittest.TestCase):
 
             (root / "component-link.yaml").symlink_to(outside / "component.yaml")
             (root / "README-link.md").symlink_to(outside / "README.md")
-            self.assertFalse(validator.validate_metadata(root, component_path="component-link.yaml")["ok"])
-            self.assertFalse(validator.validate_metadata(root, required_files=["README-link.md"])["ok"])
+            self.assertFalse(
+                validator.validate_metadata(root, component_path="component-link.yaml")["ok"]
+            )
+            self.assertFalse(
+                validator.validate_metadata(root, required_files=["README-link.md"])["ok"]
+            )
             self.assertFalse(validator.validate_documentation(root, ["README-link.md"])["ok"])
 
     def test_documentation_requires_structure_ownership_and_resolved_local_links(self) -> None:
@@ -608,7 +723,9 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             self.assertIn("contains placeholder documentation", joined)
             self.assertIn("local link target does not exist", joined)
 
-    def test_documentation_resolves_nested_parent_and_reference_links_without_root_escape(self) -> None:
+    def test_documentation_resolves_nested_parent_and_reference_links_without_root_escape(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             root = base / "repository"
@@ -619,7 +736,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             guide = docs / "guide.md"
             guide.write_text(
                 "# Guide\n\n[Root](../../README.md) and [governance][gov].\n\n"
-                "[gov]: <../../GOVERNANCE.md> \"policy\"\n",
+                '[gov]: <../../GOVERNANCE.md> "policy"\n',
                 encoding="utf-8",
             )
             self.assertTrue(validator.validate_documentation(root, ["docs"])["ok"])
@@ -663,7 +780,17 @@ class ReusableWorkflowContractTest(unittest.TestCase):
     def test_context_marks_fork_pull_requests_as_untrusted(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             event = Path(temporary) / "event.json"
-            event.write_text(json.dumps({"pull_request": {"head": {"sha": SHA, "repo": {"fork": True}}, "base": {"sha": "b" * 40}}}), encoding="utf-8")
+            event.write_text(
+                json.dumps(
+                    {
+                        "pull_request": {
+                            "head": {"sha": SHA, "repo": {"fork": True}},
+                            "base": {"sha": "b" * 40},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
             old_environment = os.environ.copy()
             try:
                 os.environ.update({"GITHUB_EVENT_NAME": "pull_request", "GITHUB_SHA": SHA})
@@ -680,16 +807,25 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             with self.subTest(repository=repository), tempfile.TemporaryDirectory() as temporary:
                 event = Path(temporary) / "event.json"
                 event.write_text(
-                    json.dumps({"pull_request": {"head": {"sha": SHA, "repo": repository}, "base": {"sha": "b" * 40}}}),
+                    json.dumps(
+                        {
+                            "pull_request": {
+                                "head": {"sha": SHA, "repo": repository},
+                                "base": {"sha": "b" * 40},
+                            }
+                        }
+                    ),
                     encoding="utf-8",
                 )
                 old_environment = os.environ.copy()
                 try:
-                    os.environ.update({
-                        "GITHUB_EVENT_NAME": "pull_request",
-                        "GITHUB_SHA": SHA,
-                        "GITHUB_REF_PROTECTED": "true",
-                    })
+                    os.environ.update(
+                        {
+                            "GITHUB_EVENT_NAME": "pull_request",
+                            "GITHUB_SHA": SHA,
+                            "GITHUB_REF_PROTECTED": "true",
+                        }
+                    )
                     outcome = validator.trusted_context(event, SHA, {"untrusted"})
                 finally:
                     os.environ.clear()
@@ -704,16 +840,25 @@ class ReusableWorkflowContractTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             event = Path(temporary) / "event.json"
             event.write_text(
-                json.dumps({"pull_request": {"head": {"sha": SHA, "repo": {"fork": False}}, "base": {"sha": "b" * 40}}}),
+                json.dumps(
+                    {
+                        "pull_request": {
+                            "head": {"sha": SHA, "repo": {"fork": False}},
+                            "base": {"sha": "b" * 40},
+                        }
+                    }
+                ),
                 encoding="utf-8",
             )
             old_environment = os.environ.copy()
             try:
-                os.environ.update({
-                    "GITHUB_EVENT_NAME": "pull_request",
-                    "GITHUB_SHA": SHA,
-                    "GITHUB_REF_PROTECTED": "true",
-                })
+                os.environ.update(
+                    {
+                        "GITHUB_EVENT_NAME": "pull_request",
+                        "GITHUB_SHA": SHA,
+                        "GITHUB_REF_PROTECTED": "true",
+                    }
+                )
                 outcome = validator.trusted_context(event, SHA, {"untrusted"})
             finally:
                 os.environ.clear()
@@ -727,15 +872,18 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             event.write_text(json.dumps({"after": SHA}), encoding="utf-8")
             old_environment = os.environ.copy()
             try:
-                os.environ.update({
-                    "GITHUB_EVENT_NAME": "push",
-                    "GITHUB_SHA": SHA,
-                    "GITHUB_REPOSITORY": "mindclade/.github",
-                    "GITHUB_ACTOR": "mindclade-bot",
-                    "GITHUB_REF": "refs/heads/feature",
-                    "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/self-test.yml@" + SHA,
-                    "GITHUB_REF_PROTECTED": "false",
-                })
+                os.environ.update(
+                    {
+                        "GITHUB_EVENT_NAME": "push",
+                        "GITHUB_SHA": SHA,
+                        "GITHUB_REPOSITORY": "mindclade/.github",
+                        "GITHUB_ACTOR": "mindclade-bot",
+                        "GITHUB_REF": "refs/heads/feature",
+                        "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/self-test.yml@"
+                        + SHA,
+                        "GITHUB_REF_PROTECTED": "false",
+                    }
+                )
                 outcome = validator.trusted_context(event, SHA, {"untrusted"})
             finally:
                 os.environ.clear()
@@ -746,17 +894,30 @@ class ReusableWorkflowContractTest(unittest.TestCase):
     def test_pull_request_uses_head_ref_instead_of_github_merge_ref(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             event = Path(temporary) / "event.json"
-            event.write_text(json.dumps({"pull_request": {"head": {"sha": SHA, "ref": "feature/x", "repo": {"fork": False}}, "base": {"sha": "b" * 40}}}), encoding="utf-8")
+            event.write_text(
+                json.dumps(
+                    {
+                        "pull_request": {
+                            "head": {"sha": SHA, "ref": "feature/x", "repo": {"fork": False}},
+                            "base": {"sha": "b" * 40},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
             old_environment = os.environ.copy()
             try:
-                os.environ.update({
-                    "GITHUB_EVENT_NAME": "pull_request",
-                    "GITHUB_SHA": SHA,
-                    "GITHUB_REPOSITORY": "mindclade/.github",
-                    "GITHUB_ACTOR": "mindclade-bot",
-                    "GITHUB_REF": "refs/pull/42/merge",
-                    "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/self-test.yml@" + SHA,
-                })
+                os.environ.update(
+                    {
+                        "GITHUB_EVENT_NAME": "pull_request",
+                        "GITHUB_SHA": SHA,
+                        "GITHUB_REPOSITORY": "mindclade/.github",
+                        "GITHUB_ACTOR": "mindclade-bot",
+                        "GITHUB_REF": "refs/pull/42/merge",
+                        "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/self-test.yml@"
+                        + SHA,
+                    }
+                )
                 outcome = validator.trusted_context(event, SHA, {"untrusted"})
             finally:
                 os.environ.clear()
@@ -767,17 +928,34 @@ class ReusableWorkflowContractTest(unittest.TestCase):
     def test_dependabot_actor_is_accepted_without_changing_pr_execution_tier(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             event = Path(temporary) / "event.json"
-            event.write_text(json.dumps({"pull_request": {"head": {"sha": SHA, "ref": "dependabot/bazel/rules_python-2.3.2", "repo": {"fork": False}}, "base": {"sha": "b" * 40}}}), encoding="utf-8")
+            event.write_text(
+                json.dumps(
+                    {
+                        "pull_request": {
+                            "head": {
+                                "sha": SHA,
+                                "ref": "dependabot/bazel/rules_python-2.3.2",
+                                "repo": {"fork": False},
+                            },
+                            "base": {"sha": "b" * 40},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
             old_environment = os.environ.copy()
             try:
-                os.environ.update({
-                    "GITHUB_EVENT_NAME": "pull_request",
-                    "GITHUB_SHA": SHA,
-                    "GITHUB_REPOSITORY": "mindclade/.github",
-                    "GITHUB_ACTOR": "dependabot[bot]",
-                    "GITHUB_REF": "refs/pull/43/merge",
-                    "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/self-test.yml@" + SHA,
-                })
+                os.environ.update(
+                    {
+                        "GITHUB_EVENT_NAME": "pull_request",
+                        "GITHUB_SHA": SHA,
+                        "GITHUB_REPOSITORY": "mindclade/.github",
+                        "GITHUB_ACTOR": "dependabot[bot]",
+                        "GITHUB_REF": "refs/pull/43/merge",
+                        "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/self-test.yml@"
+                        + SHA,
+                    }
+                )
                 outcome = validator.trusted_context(event, SHA, {"untrusted"})
             finally:
                 os.environ.clear()
@@ -789,18 +967,24 @@ class ReusableWorkflowContractTest(unittest.TestCase):
     def test_merge_group_payload_and_real_queue_ref_are_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             event = Path(temporary) / "event.json"
-            event.write_text(json.dumps({"merge_group": {"head_sha": SHA, "base_sha": "b" * 40}}), encoding="utf-8")
+            event.write_text(
+                json.dumps({"merge_group": {"head_sha": SHA, "base_sha": "b" * 40}}),
+                encoding="utf-8",
+            )
             old_environment = os.environ.copy()
             try:
-                os.environ.update({
-                    "GITHUB_EVENT_NAME": "merge_group",
-                    "GITHUB_SHA": SHA,
-                    "GITHUB_REPOSITORY": "mindclade/.github",
-                    "GITHUB_ACTOR": "mindclade-bot",
-                    "GITHUB_REF": "refs/heads/gh-readonly-queue/main/pr-42-" + SHA[:8],
-                    "GITHUB_REF_PROTECTED": "true",
-                    "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/self-test.yml@" + SHA,
-                })
+                os.environ.update(
+                    {
+                        "GITHUB_EVENT_NAME": "merge_group",
+                        "GITHUB_SHA": SHA,
+                        "GITHUB_REPOSITORY": "mindclade/.github",
+                        "GITHUB_ACTOR": "mindclade-bot",
+                        "GITHUB_REF": "refs/heads/gh-readonly-queue/main/pr-42-" + SHA[:8],
+                        "GITHUB_REF_PROTECTED": "true",
+                        "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/self-test.yml@"
+                        + SHA,
+                    }
+                )
                 outcome = validator.trusted_context(event, SHA, {"untrusted"})
             finally:
                 os.environ.clear()
@@ -814,18 +998,29 @@ class ReusableWorkflowContractTest(unittest.TestCase):
     def test_published_protected_non_prerelease_release_is_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             event = Path(temporary) / "event.json"
-            event.write_text(json.dumps({"action": "published", "release": {"target_commitish": SHA, "draft": False, "prerelease": False}}), encoding="utf-8")
+            event.write_text(
+                json.dumps(
+                    {
+                        "action": "published",
+                        "release": {"target_commitish": SHA, "draft": False, "prerelease": False},
+                    }
+                ),
+                encoding="utf-8",
+            )
             old_environment = os.environ.copy()
             try:
-                os.environ.update({
-                    "GITHUB_EVENT_NAME": "release",
-                    "GITHUB_SHA": SHA,
-                    "GITHUB_REPOSITORY": "mindclade/.github",
-                    "GITHUB_ACTOR": "release-bot",
-                    "GITHUB_REF": "refs/tags/v1.2.3",
-                    "GITHUB_REF_PROTECTED": "true",
-                    "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/self-test.yml@" + SHA,
-                })
+                os.environ.update(
+                    {
+                        "GITHUB_EVENT_NAME": "release",
+                        "GITHUB_SHA": SHA,
+                        "GITHUB_REPOSITORY": "mindclade/.github",
+                        "GITHUB_ACTOR": "release-bot",
+                        "GITHUB_REF": "refs/tags/v1.2.3",
+                        "GITHUB_REF_PROTECTED": "true",
+                        "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/self-test.yml@"
+                        + SHA,
+                    }
+                )
                 outcome = validator.trusted_context(event, SHA, {"release"})
             finally:
                 os.environ.clear()
@@ -837,18 +1032,33 @@ class ReusableWorkflowContractTest(unittest.TestCase):
     def test_release_branch_target_falls_back_to_observed_tag_sha(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             event = Path(temporary) / "event.json"
-            event.write_text(json.dumps({"action": "published", "release": {"target_commitish": "main", "draft": False, "prerelease": False}}), encoding="utf-8")
+            event.write_text(
+                json.dumps(
+                    {
+                        "action": "published",
+                        "release": {
+                            "target_commitish": "main",
+                            "draft": False,
+                            "prerelease": False,
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
             old_environment = os.environ.copy()
             try:
-                os.environ.update({
-                    "GITHUB_EVENT_NAME": "release",
-                    "GITHUB_SHA": SHA,
-                    "GITHUB_REPOSITORY": "mindclade/.github",
-                    "GITHUB_ACTOR": "release-bot",
-                    "GITHUB_REF": "refs/tags/v1.2.3",
-                    "GITHUB_REF_PROTECTED": "true",
-                    "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/self-test.yml@" + SHA,
-                })
+                os.environ.update(
+                    {
+                        "GITHUB_EVENT_NAME": "release",
+                        "GITHUB_SHA": SHA,
+                        "GITHUB_REPOSITORY": "mindclade/.github",
+                        "GITHUB_ACTOR": "release-bot",
+                        "GITHUB_REF": "refs/tags/v1.2.3",
+                        "GITHUB_REF_PROTECTED": "true",
+                        "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/self-test.yml@"
+                        + SHA,
+                    }
+                )
                 outcome = validator.trusted_context(event, SHA, {"release"})
             finally:
                 os.environ.clear()

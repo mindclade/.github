@@ -3,12 +3,16 @@
 *.swo
 *~
 .idea/
-.vscode/
 .env
 .env.*
 !.env.example
 coverage/
 dist/
 build/
+/bazel-*
+/result
+/result-*
 __pycache__/
 *.py[cod]
+!.vscode/
+!.vscode/*.json

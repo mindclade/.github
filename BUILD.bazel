@@ -75,6 +75,31 @@ filegroup(
 )
 
 filegroup(
+    name = "repository_governance_sources",
+    srcs = [
+        ".bazelignore",
+        ".bazelrc",
+        ".bazelversion",
+        ".editorconfig",
+        ".gitignore",
+        ".markdownlint-cli2.yaml",
+        ".pre-commit-config.yaml",
+        ".vscode/extensions.json",
+        ".vscode/settings.json",
+        ".yamllint.yaml",
+        "CONTRIBUTING.md",
+        "MODULE.bazel",
+        "MODULE.bazel.lock",
+        "README.md",
+        "biome.json",
+        "flake.lock",
+        "flake.nix",
+        "justfile",
+        "pyproject.toml",
+    ],
+)
+
+filegroup(
     name = "test_fixtures",
     srcs = glob(["tests/fixtures/*.json"]),
 )
@@ -174,6 +199,7 @@ py_test(
     ],
     data = [
         ":policy_check",
+        ":repository_governance_sources",
         ":schema_sources",
         ":test_fixtures",
         ":workflow_lint",
@@ -192,6 +218,7 @@ py_test(
     ],
     data = [
         ":policy_check",
+        ":repository_governance_sources",
         ":schema_sources",
         ":test_fixtures",
         ":workflow_lint",
@@ -210,6 +237,7 @@ py_test(
     ],
     data = [
         ":policy_check",
+        ":repository_governance_sources",
         ":schema_sources",
         ":test_fixtures",
         ":workflow_lint",

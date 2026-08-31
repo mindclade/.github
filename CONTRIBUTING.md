@@ -11,6 +11,25 @@ This is pre-production organization GitHub automation source. Contributions must
 3. Do not commit credentials, tokens, private data, live-state exports, or unredacted security evidence.
 4. Obtain platform ownership from `@mindclade/developer-platform` and security review from `@mindclade/security`.
 
+## Formatting and static analysis
+
+Use the repository-root commands from the pinned Nix shell:
+
+```text
+just format
+just format-check
+just lint
+just check
+```
+
+`just format` edits handwritten source and configuration only. Durable JSON
+fixtures under `tests/fixtures/` are intentionally excluded. Lint suppressions
+must name the exact rule and explain why the exception is safe.
+
+Pyright is strict by default. Existing dynamic JSON and workflow test modules
+carry an explicit file-level `basic` migration directive with only the named
+dynamic checks disabled; newly added Python modules inherit strict checking.
+
 ## Activation
 
 A source-ready change has complete source, metadata, validation, and review evidence. It does not make external organization settings, credentials, or workflow integrations live. Connected activation requires separately approved and independently verified external governance and security controls.

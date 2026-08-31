@@ -30,7 +30,10 @@
     "base_revision": { "oneOf": [{ "$ref": "#/$defs/gitSha" }, { "type": "null" }] },
     "context_digest": { "$ref": "#/$defs/sha256Digest" },
     "caller_repository": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" },
-    "workflow_ref": { "type": "string", "pattern": "^\\.github/workflows/[A-Za-z0-9._-]+\\.ya?ml$" },
+    "workflow_ref": {
+      "type": "string",
+      "pattern": "^\\.github/workflows/[A-Za-z0-9._-]+\\.ya?ml$"
+    },
     "workflow_revision": { "$ref": "#/$defs/gitSha" },
     "pipeline_definition_revision": { "$ref": "#/$defs/gitSha" },
     "producer": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{2,255}$" },
