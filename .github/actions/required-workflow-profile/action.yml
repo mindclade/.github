@@ -25,25 +25,25 @@ outputs:
   profile:
     description: Fixed repository CI profile.
     value: ${{ steps.policy.outputs.profile }}
-  event-class:
+  event_class:
     description: Normalized pull_request or merge_group event class.
     value: ${{ steps.policy.outputs.event_class }}
-  affected-shards-json:
+  affected_shards_json:
     description: Canonical JSON array of shards that must succeed.
     value: ${{ steps.policy.outputs.affected_shards_json }}
-  not-required-shards-json:
+  not_required_shards_json:
     description: Canonical JSON array of shards that must be skipped.
     value: ${{ steps.policy.outputs.not_required_shards_json }}
-  policy-digest:
+  policy_digest:
     description: Digest of the immutable generated profile catalog.
     value: ${{ steps.policy.outputs.policy_digest }}
   decision:
     description: "Review decision: approved, bypassed, or denied."
     value: ${{ steps.policy.outputs.decision }}
-  reason-code:
+  reason_code:
     description: Stable review-policy reason code.
     value: ${{ steps.policy.outputs.reason_code }}
-  evidence-path:
+  evidence_path:
     description: Local canonical review evidence path.
     value: ${{ steps.policy.outputs.evidence_path }}
 runs:

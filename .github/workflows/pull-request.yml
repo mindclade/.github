@@ -2,94 +2,254 @@ name: Pull request
 
 on:
   pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review]
+  pull_request_review:
+    types: [submitted, edited, dismissed]
   merge_group:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
+    types: [checks_requested]
 
 concurrency:
-  group: mindclade-org-pull-request-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+  group: mindclade-required-${{ github.repository }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-permissions:
-  contents: read
+permissions: {}
 
 jobs:
-  required:
-    name: required
+  profile:
+    name: Resolve fixed profile
+    if: ${{ github.repository != '' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      affected_shards_json: ${{ steps.profile.outputs.affected_shards_json }}
+      event_class: ${{ steps.profile.outputs.event_class }}
+      not_required_shards_json: ${{ steps.profile.outputs.not_required_shards_json }}
+      policy_digest: ${{ steps.profile.outputs.policy_digest }}
+      profile: ${{ steps.profile.outputs.profile }}
+      source_revision: ${{ steps.source.outputs.source_revision }}
+    steps:
+      - id: source
+        name: Bind the event source revision
+        env:
+          SOURCE_REVISION: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          printf 'source_revision=%s\n' "${SOURCE_REVISION}" >> "${GITHUB_OUTPUT}"
+      - id: profile
+        name: Resolve the immutable repository profile
+        uses: $/.github/actions/required-workflow-profile
+        with:
+          mode: plan
+          repository: ${{ github.repository }}
+          event-name: ${{ github.event_name }}
+          source-revision: ${{ steps.source.outputs.source_revision }}
+
+  review_policy:
+    name: Review policy
+    needs: profile
+    if: needs.profile.result == 'success' && needs.profile.outputs.event_class == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: read
-    env:
-      NIX_CONFIG: |
-        experimental-features = nix-command flakes
-        accept-flake-config = false
-        substituters = https://cache.nixos.org/
-        trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
-        require-sigs = true
+      issues: read
+      pull-requests: read
+    outputs:
+      decision: ${{ steps.review.outputs.decision }}
     steps:
-      - name: Check out exact source revision
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: review
+        name: Evaluate head-bound review evidence
+        continue-on-error: true
+        uses: $/.github/actions/required-workflow-profile
         with:
-          fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          persist-credentials: false
-      - id: context
-        name: Validate caller context
-        uses: ./.github/actions/validate-trusted-context
+          mode: review
+          repository: ${{ github.repository }}
+          event-name: ${{ github.event_name }}
+          source-revision: ${{ needs.profile.outputs.source_revision }}
+          pull-request-number: ${{ github.event.pull_request.number }}
+          github-token: ${{ github.token }}
+      - id: evidence
+        name: Publish immutable review evidence
+        if: always() && steps.review.outputs.evidence_path != ''
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.0
         with:
-          expected-source-revision: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Verify immutable implementation closure
-        uses: ./.github/actions/verify-pinned-actions
-      - name: Stage the checksum-verified Nix installer
+          name: review-policy-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.review.outputs.evidence_path }}
+          if-no-files-found: error
+          overwrite: false
+          retention-days: 30
+      - name: Enforce review policy and evidence publication
+        if: always()
         env:
-          NIX_INSTALLER_SHA256: f964e78c30bb096d1449179d738eeae8f9410df1623d42fe7da972643e0d0e74
-          NIX_INSTALLER_URL: https://github.com/DeterminateSystems/nix-installer/releases/download/v3.12.2/nix-installer-x86_64-linux
+          DECISION: ${{ steps.review.outputs.decision }}
+          EVIDENCE_OUTCOME: ${{ steps.evidence.outcome }}
+          REVIEW_OUTCOME: ${{ steps.review.outcome }}
         run: |
           set -euo pipefail
-          install_root="${RUNNER_TEMP}/nix-installer"
-          installer="${install_root}/nix-installer-x86_64-linux"
-          mkdir -m 0700 "${install_root}"
-          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
-            --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
-            --output "${installer}" "${NIX_INSTALLER_URL}"
-          printf '%s  %s\n' "${NIX_INSTALLER_SHA256}" "${installer}" | sha256sum --check --strict
-          chmod 0755 "${installer}"
-      - name: Install the reviewed Nix runtime
-        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v3.15.1 action, v3.12.2 installer below
-        with:
-          determinate: true
-          local-root: ${{ runner.temp }}/nix-installer
-      - name: Verify the locked toolchain contract
+          [[ "${REVIEW_OUTCOME}" == success ]]
+          [[ "${EVIDENCE_OUTCOME}" == success ]]
+          [[ "${DECISION}" == approved || "${DECISION}" == bypassed ]]
+
+  nix_validation:
+    name: Nix qualification
+    needs: profile
+    if: needs.profile.result == 'success' && needs.profile.outputs.profile == 'nix-standard'
+    permissions:
+      contents: read
+    uses: mindclade/.github/.github/workflows/reusable-nix-validation.yml@b4d28faa5fde98087f60262110a43f25f6da9eb8
+    with:
+      source_revision: ${{ needs.profile.outputs.source_revision }}
+
+  classify:
+    name: Classify Buildkite source
+    needs: profile
+    if: needs.profile.result == 'success' && needs.profile.outputs.profile == 'buildkite-isolated'
+    permissions:
+      contents: read
+    uses: mindclade/.github/.github/workflows/reusable-metadata-validation.yml@b4d28faa5fde98087f60262110a43f25f6da9eb8
+    with:
+      source_revision: ${{ needs.profile.outputs.source_revision }}
+
+  fork_checks:
+    name: Untrusted fork documentation
+    needs: [profile, classify]
+    if: >-
+      needs.profile.result == 'success' &&
+      needs.classify.result == 'success' &&
+      (github.event_name == 'pull_request' || github.event_name == 'pull_request_review') &&
+      needs.classify.outputs.trust_classification == 'untrusted'
+    permissions:
+      contents: read
+    uses: mindclade/.github/.github/workflows/reusable-documentation-check.yml@b4d28faa5fde98087f60262110a43f25f6da9eb8
+    with:
+      source_revision: ${{ needs.profile.outputs.source_revision }}
+      documentation_roots: |-
+        README.md
+        docs
+
+  dispatch:
+    name: Dispatch isolated Buildkite qualification
+    needs: [profile, classify]
+    if: >-
+      needs.profile.result == 'success' &&
+      needs.classify.result == 'success' &&
+      needs.classify.outputs.trust_classification != 'untrusted'
+    permissions:
+      contents: read
+    uses: mindclade/.github/.github/workflows/reusable-buildkite-dispatch.yml@b4d28faa5fde98087f60262110a43f25f6da9eb8
+    with:
+      source_revision: ${{ needs.profile.outputs.source_revision }}
+      pipeline_class: presubmit
+    secrets:
+      buildkite_dispatch_token: ${{ secrets.MINDCLADE_BUILDKITE_DISPATCH_TOKEN }}
+      buildkite_pipeline: ${{ secrets.MINDCLADE_BUILDKITE_PIPELINE }}
+
+  buildkite_required:
+    name: Verify isolated Buildkite qualification
+    needs: [profile, classify, dispatch]
+    if: needs.dispatch.result == 'success'
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    uses: mindclade/.github/.github/workflows/reusable-required-check.yml@b4d28faa5fde98087f60262110a43f25f6da9eb8
+    with:
+      source_revision: ${{ needs.profile.outputs.source_revision }}
+      pipeline_definition_revision: ${{ needs.dispatch.outputs.pipeline_definition_revision }}
+      build_id: ${{ needs.dispatch.outputs.build_id }}
+      build_number: ${{ needs.dispatch.outputs.build_number }}
+      correlation_id: ${{ needs.dispatch.outputs.correlation_id }}
+      context_digest: ${{ needs.dispatch.outputs.context_digest }}
+      archive_evidence: false
+    secrets:
+      buildkite_cancel_token: ${{ secrets.MINDCLADE_BUILDKITE_CANCEL_TOKEN }}
+      buildkite_evidence_token: ${{ secrets.MINDCLADE_BUILDKITE_EVIDENCE_TOKEN }}
+      buildkite_pipeline: ${{ secrets.MINDCLADE_BUILDKITE_PIPELINE }}
+
+  required:
+    name: required
+    needs:
+      - profile
+      - review_policy
+      - nix_validation
+      - classify
+      - fork_checks
+      - dispatch
+      - buildkite_required
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    env:
+      AFFECTED_SHARDS_JSON: ${{ needs.profile.outputs.affected_shards_json }}
+      BUILDKITE_REQUIRED_RESULT: ${{ needs.buildkite_required.result }}
+      CLASSIFY_RESULT: ${{ needs.classify.result }}
+      DISPATCH_RESULT: ${{ needs.dispatch.result }}
+      EVENT_CLASS: ${{ needs.profile.outputs.event_class }}
+      FORK_CHECKS_RESULT: ${{ needs.fork_checks.result }}
+      NIX_VALIDATION_RESULT: ${{ needs.nix_validation.result }}
+      NOT_REQUIRED_SHARDS_JSON: ${{ needs.profile.outputs.not_required_shards_json }}
+      POLICY_DIGEST: ${{ needs.profile.outputs.policy_digest }}
+      PROFILE: ${{ needs.profile.outputs.profile }}
+      PROFILE_RESULT: ${{ needs.profile.result }}
+      REVIEW_DECISION: ${{ needs.review_policy.outputs.decision }}
+      REVIEW_POLICY_RESULT: ${{ needs.review_policy.result }}
+      TRUST_CLASSIFICATION: ${{ needs.classify.outputs.trust_classification }}
+    steps:
+      - name: Enforce the exact fail-closed shard plan
         run: |
           set -euo pipefail
-          nix --version
-          nix config show --json | jq -e '
-            def config_value:
-              if type == "object" and has("value") then .value else . end;
-            (.substituters | config_value) == ["https://cache.nixos.org/"] and
-            (."trusted-public-keys" | config_value) ==
-              ["cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="] and
-            (."require-sigs" | config_value) == true and
-            (."accept-flake-config" | config_value) == false
-          ' >/dev/null
-          nix build --no-accept-flake-config --no-update-lock-file .#toolchain
-          nix flake check --no-accept-flake-config --no-update-lock-file --print-build-logs
-      - name: Run repository validation through the locked CI shell
-        run: nix develop --no-accept-flake-config --no-update-lock-file .#ci --command just ci
-      - name: Verify internal template pins on approved main
-        env:
-          APPROVED_MAIN_REVISION: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
-        run: |
-          set -euo pipefail
-          nix develop --no-accept-flake-config --no-update-lock-file .#ci --command \
-            python3 tools/validate_reusable_workflows.py template-pins \
-            --root "${GITHUB_WORKSPACE}" \
-            --approved-main-revision "${APPROVED_MAIN_REVISION}"
-      - name: Verify validation leaves no generated drift
-        run: |
-          set -euo pipefail
-          git diff --check
-          test -z "$(git status --short)"
+          [[ "${PROFILE_RESULT}" == success ]]
+          [[ "${POLICY_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          results="$(jq -cn \
+            --arg review_policy "${REVIEW_POLICY_RESULT}" \
+            --arg nix_validation "${NIX_VALIDATION_RESULT}" \
+            --arg classify "${CLASSIFY_RESULT}" \
+            --arg fork_checks "${FORK_CHECKS_RESULT}" \
+            --arg dispatch "${DISPATCH_RESULT}" \
+            --arg buildkite_required "${BUILDKITE_REQUIRED_RESULT}" \
+            '{
+              review_policy: $review_policy,
+              nix_validation: $nix_validation,
+              classify: $classify,
+              fork_checks: $fork_checks,
+              dispatch: $dispatch,
+              buildkite_required: $buildkite_required
+            }')"
+          jq -e \
+            --argjson affected "${AFFECTED_SHARDS_JSON}" \
+            --argjson not_required "${NOT_REQUIRED_SHARDS_JSON}" \
+            --argjson results "${results}" '
+              ($affected | type == "array" and length > 0 and length == (unique | length)) and
+              ($not_required | type == "array" and length == (unique | length)) and
+              (($affected - ($results | keys)) == []) and
+              (($not_required - ($results | keys)) == []) and
+              (all($affected[]; $results[.] == "success")) and
+              (all($not_required[]; $results[.] == "skipped"))
+            ' >/dev/null
+          case "${PROFILE}:${EVENT_CLASS}" in
+            nix-standard:pull_request)
+              [[ "${AFFECTED_SHARDS_JSON}" == '["review_policy","nix_validation"]' ]]
+              [[ "${REVIEW_DECISION}" == approved || "${REVIEW_DECISION}" == bypassed ]]
+              ;;
+            nix-standard:merge_group)
+              [[ "${AFFECTED_SHARDS_JSON}" == '["nix_validation"]' ]]
+              ;;
+            buildkite-isolated:pull_request)
+              [[ "${AFFECTED_SHARDS_JSON}" == '["review_policy","classify","dispatch","buildkite_required"]' ]]
+              [[ "${REVIEW_DECISION}" == approved || "${REVIEW_DECISION}" == bypassed ]]
+              [[ "${TRUST_CLASSIFICATION}" == trusted ]]
+              [[ "${FORK_CHECKS_RESULT}" == skipped ]]
+              ;;
+            buildkite-isolated:merge_group)
+              [[ "${AFFECTED_SHARDS_JSON}" == '["classify","dispatch","buildkite_required"]' ]]
+              [[ "${TRUST_CLASSIFICATION}" == protected ]]
+              [[ "${FORK_CHECKS_RESULT}" == skipped ]]
+              ;;
+            *)
+              exit 1
+              ;;
+          esac

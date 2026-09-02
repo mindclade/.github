@@ -29,6 +29,7 @@ SELF_TEST_WORKFLOW_PATH = ".github/workflows/pull-request.yml"
 REQUIRED_CHECK_WORKFLOW_PATH = ".github/workflows/reusable-required-check.yml"
 BUILDKITE_DISPATCH_WORKFLOW_PATH = ".github/workflows/reusable-buildkite-dispatch.yml"
 BUILDKITE_BRIDGE_TEMPLATE_PATH = "workflow-templates/buildkite-bridge.yml"
+ORGANIZATION_REQUIRED_WORKFLOW_PATH = ".github/workflows/pull-request.yml"
 REQUIRED_CHECK_CALL = re.compile(
     r"^mindclade/\.github/\.github/workflows/reusable-required-check\.yml@[0-9a-f]{40}$"
 )
@@ -1091,7 +1092,8 @@ def validate_permissions(root: Path) -> dict[str, Any]:
                     and trusted_context_producer
                 )
                 approved_delegation = (
-                    relative.as_posix() == BUILDKITE_BRIDGE_TEMPLATE_PATH
+                    relative.as_posix()
+                    in {BUILDKITE_BRIDGE_TEMPLATE_PATH, ORGANIZATION_REQUIRED_WORKFLOW_PATH}
                     and job_name == "buildkite_required"
                     and isinstance(job.get("uses"), str)
                     and REQUIRED_CHECK_CALL.fullmatch(job["uses"]) is not None
@@ -1570,6 +1572,99 @@ esac"""
     return errors
 
 
+def _organization_required_errors(document: dict[str, Any], relative: Path) -> list[str]:
+    if relative.as_posix() != ORGANIZATION_REQUIRED_WORKFLOW_PATH:
+        return []
+    prefix = f"{relative}: organization-required workflow"
+    errors: list[str] = []
+    if document.get("name") != "Pull request":
+        errors.append(f"{prefix} name must remain Pull request")
+    triggers = document.get("on")
+    expected_triggers = {
+        "pull_request": {
+            "types": [
+                "opened",
+                "reopened",
+                "synchronize",
+                "labeled",
+                "unlabeled",
+                "ready_for_review",
+            ]
+        },
+        "pull_request_review": {"types": ["submitted", "edited", "dismissed"]},
+        "merge_group": {"types": ["checks_requested"]},
+    }
+    if triggers != expected_triggers:
+        errors.append(
+            f"{prefix} triggers must include exact PR, review, label, and merge refreshes"
+        )
+    if document.get("permissions") != {}:
+        errors.append(f"{prefix} must deny permissions at workflow scope")
+    jobs = document.get("jobs")
+    expected_jobs = {
+        "profile",
+        "review_policy",
+        "nix_validation",
+        "classify",
+        "fork_checks",
+        "dispatch",
+        "buildkite_required",
+        "required",
+    }
+    if not isinstance(jobs, dict) or set(jobs) != expected_jobs:
+        errors.append(f"{prefix} must declare the exact fixed shard set")
+        return errors
+    profile = jobs["profile"]
+    if profile.get("if") != "${{ github.repository != '' }}" or profile.get("permissions") != {}:
+        errors.append(f"{prefix} profile must use the source-repository compatibility guard")
+    profile_steps = profile.get("steps")
+    profile_uses = [
+        step.get("uses")
+        for step in profile_steps or []
+        if isinstance(step, dict) and "uses" in step
+    ]
+    if profile_uses != ["$/.github/actions/required-workflow-profile"]:
+        errors.append(f"{prefix} profile must use only the immutable fixed-profile action")
+    reusable_jobs = {
+        name: jobs[name]
+        for name in (
+            "nix_validation",
+            "classify",
+            "fork_checks",
+            "dispatch",
+            "buildkite_required",
+        )
+    }
+    revisions: set[str] = set()
+    for name, job in reusable_jobs.items():
+        reference = job.get("uses") if isinstance(job, dict) else None
+        if not isinstance(reference, str) or "@" not in reference:
+            errors.append(f"{prefix} shard {name} must call an immutable reusable workflow")
+            continue
+        revisions.add(reference.rsplit("@", 1)[1])
+    if len(revisions) != 1 or any(not SHA.fullmatch(revision) for revision in revisions):
+        errors.append(f"{prefix} every reusable shard must share one exact implementation SHA")
+    required = jobs["required"]
+    if (
+        required.get("name") != "required"
+        or required.get("if") != "always()"
+        or required.get("permissions") != {}
+        or set(required.get("needs", [])) != expected_jobs - {"required"}
+    ):
+        errors.append(f"{prefix} final required job must always aggregate every other shard")
+    steps = required.get("steps") if isinstance(required, dict) else None
+    run = steps[0].get("run") if isinstance(steps, list) and len(steps) == 1 else None
+    fail_closed_markers = (
+        'all($affected[]; $results[.] == "success")',
+        'all($not_required[]; $results[.] == "skipped")',
+        '[[ "${FORK_CHECKS_RESULT}" == skipped ]]',
+        '[[ "${TRUST_CLASSIFICATION}" == protected ]]',
+    )
+    if not isinstance(run, str) or any(marker not in run for marker in fail_closed_markers):
+        errors.append(f"{prefix} final required job must fail closed over every shard state")
+    return errors
+
+
 def _buildkite_dispatch_errors(document: dict[str, Any], relative: Path) -> list[str]:
     if relative.as_posix() != BUILDKITE_DISPATCH_WORKFLOW_PATH:
         return []
@@ -1719,6 +1814,7 @@ def validate_workflows(root: Path) -> dict[str, Any]:
         errors.extend(_bounded_concurrency_errors(document, relative))
         errors.extend(_buildkite_dispatch_errors(document, relative))
         errors.extend(_buildkite_bridge_errors(document, relative))
+        errors.extend(_organization_required_errors(document, relative))
         for _, key, value in _walk_yaml(document):
             if key == "run" and isinstance(value, str) and _run_uses_caller_inputs(value):
                 errors.append(

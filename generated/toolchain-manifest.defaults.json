@@ -3,7 +3,7 @@
   "authority": {
     "policy_digest": "sha256:f2cac5e9ef4933544b042b04b6efeddc74a81e533019a6d42ec19d17c37ab34b",
     "repository": "mindclade/.github",
-    "revision": null
+    "revision": "b4d28faa5fde98087f60262110a43f25f6da9eb8"
   },
   "bazel": {
     "startup_jdk_major": 21,

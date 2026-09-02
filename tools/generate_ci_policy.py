@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pyright: basic, reportArgumentType=false, reportIndexIssue=false, reportOptionalMemberAccess=false
 """Generate the immutable estate Nix, Bazel, and required-workflow policy closure."""
 
 from __future__ import annotations

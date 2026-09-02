@@ -2,7 +2,7 @@
   "api_version": "ci.mindclade.dev/v1",
   "generated": {
     "authority_repository": "mindclade/.github",
-    "authority_revision": null,
+    "authority_revision": "b4d28faa5fde98087f60262110a43f25f6da9eb8",
     "profile_digest": "sha256:9862e830ba3cc84a52ae053d00e50833a448e006a67d640716984778eaf2e777"
   },
   "kind": "RequiredWorkflowProfiles",
