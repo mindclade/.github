@@ -466,6 +466,55 @@ class ActionDigestPinningTest(unittest.TestCase):
         self.assertEqual([1.0], timeouts)
         self.assertEqual([1.0], sleeps)
 
+    def test_buildkite_poll_interval_backs_off_to_a_cap(self) -> None:
+        """A long build must not hold a runner in a fixed two-second busy loop.
+
+        The first polls stay tight so a fast build is not delayed, then the
+        interval doubles to a cap. Without this the poll issues one request every
+        two seconds for up to an hour.
+        """
+        sleeps: list[float] = []
+        elapsed = [0.0]
+
+        def sleeper(duration: float) -> None:
+            sleeps.append(duration)
+            elapsed[0] += duration
+
+        def clock() -> float:
+            return elapsed[0]
+
+        def opener(_request: object, timeout: int) -> _Response:
+            self._assert_request_timeout(timeout)
+            return _Response(
+                {
+                    "id": BUILD_ID,
+                    "number": 7,
+                    "commit": SHA,
+                    "state": "running",
+                    "blocked": False,
+                }
+            )
+
+        client = evidence.BuildkiteClient(
+            "token-not-logged",
+            "mindclade",
+            opener,
+            sleeper=sleeper,
+            clock=clock,
+            jitter=lambda: 0.0,
+        )
+        with self.assertRaisesRegex(RuntimeError, evidence.DEADLINE_EXCEEDED):
+            client.verify_evidence("validate", BUILD_ID, BUILD_NUMBER, SHA, 3600)
+
+        self.assertEqual(evidence.POLL_INITIAL_DELAY_SECONDS, sleeps[0])
+        self.assertEqual([2.0, 4.0, 8.0, 16.0, 30.0, 30.0], sleeps[:6])
+        self.assertTrue(
+            all(delay <= evidence.POLL_MAX_DELAY_SECONDS for delay in sleeps),
+            "poll interval must never exceed the cap",
+        )
+        # A fixed two-second interval would need 1800 polls to fill the hour.
+        self.assertLess(len(sleeps), 200)
+
     def test_buildkite_rechecks_commit_on_every_poll(self) -> None:
         calls = 0
 

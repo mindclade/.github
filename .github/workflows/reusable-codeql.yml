@@ -20,37 +20,37 @@ on:
     outputs:
       correlation_id:
         description: Stable correlation identifier.
-        value: ${{ jobs.finalize.outputs.correlation_id }}
+        value: ${{ jobs.prepare.outputs.correlation_id }}
       source_revision:
         description: Validated source revision.
-        value: ${{ jobs.finalize.outputs.source_revision }}
+        value: ${{ jobs.prepare.outputs.source_revision }}
       caller_repository:
         description: Validated caller repository.
-        value: ${{ jobs.finalize.outputs.caller_repository }}
+        value: ${{ jobs.prepare.outputs.caller_repository }}
       trust_classification:
         description: Observed source trust classification.
-        value: ${{ jobs.finalize.outputs.trust_classification }}
+        value: ${{ jobs.prepare.outputs.source_trust }}
       execution_tier:
         description: Observed execution tier.
-        value: ${{ jobs.finalize.outputs.execution_tier }}
+        value: ${{ jobs.prepare.outputs.execution_tier }}
       plan_id:
         description: CodeQL plan identifier.
-        value: ${{ jobs.finalize.outputs.plan_id }}
+        value: ${{ jobs.protected.outputs.plan_id || jobs.untrusted.outputs.plan_id }}
       build_id:
         description: Provider build identifier.
-        value: ${{ jobs.finalize.outputs.build_id }}
+        value: ${{ github.run_id }}
       conclusion:
         description: Normalized conclusion.
-        value: ${{ jobs.finalize.outputs.conclusion }}
+        value: ${{ jobs.protected.outputs.conclusion || jobs.untrusted.outputs.conclusion }}
       reason_code:
         description: Stable conclusion reason.
-        value: ${{ jobs.finalize.outputs.reason_code }}
+        value: ${{ jobs.protected.outputs.reason_code || jobs.untrusted.outputs.reason_code }}
       evidence_digest:
         description: Canonical evidence digest.
-        value: ${{ jobs.finalize.outputs.evidence_digest }}
+        value: ${{ jobs.protected.outputs.evidence_digest || jobs.untrusted.outputs.evidence_digest }}
       evidence_ref:
         description: Immutable evidence artifact reference.
-        value: ${{ jobs.finalize.outputs.evidence_ref }}
+        value: ${{ jobs.protected.outputs.evidence_ref || jobs.untrusted.outputs.evidence_ref }}
 
 concurrency:
   group: mindclade-org-codeql-${{ github.repository }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -68,8 +68,10 @@ jobs:
     outputs:
       base_revision: ${{ steps.context.outputs.base_revision }}
       context_json: ${{ steps.context.outputs.context_json }}
+      caller_repository: ${{ github.repository }}
       correlation_id: ${{ steps.context.outputs.correlation_id }}
       execution_tier: ${{ steps.context.outputs.execution_tier }}
+      source_revision: ${{ inputs.source_revision }}
       implementation_root: ${{ steps.context.outputs.implementation_root }}
       source_trust: ${{ steps.context.outputs.source_trust }}
     steps:
@@ -108,6 +110,20 @@ jobs:
           if build_mode == "none" and language in {"go", "java-kotlin", "swift"}:
               raise SystemExit("go, java-kotlin, and swift require build_mode autobuild")
           PY
+      - name: Assert the execution tier is analysed by exactly one tier job
+        env:
+          EXECUTION_TIER: ${{ steps.context.outputs.execution_tier }}
+        run: |
+          set -euo pipefail
+          # untrusted is analysed by the untrusted job; trusted and release by the
+          # protected job. Any other value would skip both and pass with no analysis.
+          case "${EXECUTION_TIER}" in
+            untrusted | trusted | release) ;;
+            *)
+              echo "unsupported execution tier: ${EXECUTION_TIER}" >&2
+              exit 1
+              ;;
+          esac
 
   untrusted:
     name: Mindclade / CodeQL (untrusted)
@@ -121,6 +137,7 @@ jobs:
       conclusion: ${{ steps.result.outputs.conclusion }}
       evidence_digest: ${{ steps.evidence.outputs.evidence_digest }}
       evidence_ref: ${{ steps.evidence.outputs.evidence_ref }}
+      plan_id: ${{ steps.result.outputs.plan_id }}
       reason_code: ${{ steps.result.outputs.reason_code }}
     steps:
       - id: checkout
@@ -171,6 +188,7 @@ jobs:
           CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
           INIT_OUTCOME: ${{ steps.init.outcome }}
           REPORTS_OUTCOME: ${{ steps.reports.outcome }}
+          PLAN_ID: codeql-untrusted-v1
         run: |
           set -euo pipefail
           conclusion=success
@@ -188,7 +206,8 @@ jobs:
             conclusion=failure
             reason=CODEQL_REPORT_MISSING
           fi
-          printf 'conclusion=%s\nreason_code=%s\n' "${conclusion}" "${reason}" >> "${GITHUB_OUTPUT}"
+          printf 'conclusion=%s\nreason_code=%s\nplan_id=%s\n' \
+            "${conclusion}" "${reason}" "${PLAN_ID}" >> "${GITHUB_OUTPUT}"
       - id: evidence
         name: Publish CI evidence
         if: always()
@@ -226,6 +245,7 @@ jobs:
       conclusion: ${{ steps.result.outputs.conclusion }}
       evidence_digest: ${{ steps.evidence.outputs.evidence_digest }}
       evidence_ref: ${{ steps.evidence.outputs.evidence_ref }}
+      plan_id: ${{ steps.result.outputs.plan_id }}
       reason_code: ${{ steps.result.outputs.reason_code }}
     steps:
       - id: checkout
@@ -276,6 +296,7 @@ jobs:
           CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
           INIT_OUTCOME: ${{ steps.init.outcome }}
           REPORTS_OUTCOME: ${{ steps.reports.outcome }}
+          PLAN_ID: codeql-protected-v1
         run: |
           set -euo pipefail
           conclusion=success
@@ -293,7 +314,8 @@ jobs:
             conclusion=failure
             reason=CODEQL_REPORT_MISSING
           fi
-          printf 'conclusion=%s\nreason_code=%s\n' "${conclusion}" "${reason}" >> "${GITHUB_OUTPUT}"
+          printf 'conclusion=%s\nreason_code=%s\nplan_id=%s\n' \
+            "${conclusion}" "${reason}" "${PLAN_ID}" >> "${GITHUB_OUTPUT}"
       - id: evidence
         name: Publish CI evidence
         if: always()
@@ -318,61 +340,3 @@ jobs:
           [[ "${CONCLUSION}" == success ]]
           [[ "${EVIDENCE_OUTCOME}" == success ]]
 
-  finalize:
-    name: Mindclade / CodeQL Result
-    needs: [prepare, untrusted, protected]
-    if: always()
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    outputs:
-      correlation_id: ${{ needs.prepare.outputs.correlation_id }}
-      source_revision: ${{ inputs.source_revision }}
-      caller_repository: ${{ github.repository }}
-      trust_classification: ${{ needs.prepare.outputs.source_trust }}
-      execution_tier: ${{ needs.prepare.outputs.execution_tier }}
-      plan_id: ${{ steps.collect.outputs.plan_id }}
-      build_id: ${{ github.run_id }}
-      conclusion: ${{ steps.collect.outputs.conclusion }}
-      reason_code: ${{ steps.collect.outputs.reason_code }}
-      evidence_digest: ${{ steps.collect.outputs.evidence_digest }}
-      evidence_ref: ${{ steps.collect.outputs.evidence_ref }}
-    steps:
-      - id: collect
-        name: Select tier result
-        env:
-          EXECUTION_TIER: ${{ needs.prepare.outputs.execution_tier }}
-          PREPARE_RESULT: ${{ needs.prepare.result }}
-          PROTECTED_CONCLUSION: ${{ needs.protected.outputs.conclusion }}
-          PROTECTED_DIGEST: ${{ needs.protected.outputs.evidence_digest }}
-          PROTECTED_REASON: ${{ needs.protected.outputs.reason_code }}
-          PROTECTED_REF: ${{ needs.protected.outputs.evidence_ref }}
-          UNTRUSTED_CONCLUSION: ${{ needs.untrusted.outputs.conclusion }}
-          UNTRUSTED_DIGEST: ${{ needs.untrusted.outputs.evidence_digest }}
-          UNTRUSTED_REASON: ${{ needs.untrusted.outputs.reason_code }}
-          UNTRUSTED_REF: ${{ needs.untrusted.outputs.evidence_ref }}
-        run: |
-          set -euo pipefail
-          if [[ "${PREPARE_RESULT}" != success ]]; then
-            printf '%s\n' \
-              'plan_id=codeql-context-v1' \
-              'conclusion=action_required' \
-              'reason_code=CONTEXT_OR_CONFIGURATION_INVALID' \
-              'evidence_digest=' \
-              'evidence_ref=' >> "${GITHUB_OUTPUT}"
-          elif [[ "${EXECUTION_TIER}" == untrusted ]]; then
-            printf 'plan_id=codeql-untrusted-v1\nconclusion=%s\nreason_code=%s\nevidence_digest=%s\nevidence_ref=%s\n' \
-              "${UNTRUSTED_CONCLUSION}" "${UNTRUSTED_REASON}" "${UNTRUSTED_DIGEST}" "${UNTRUSTED_REF}" >> "${GITHUB_OUTPUT}"
-          else
-            printf 'plan_id=codeql-protected-v1\nconclusion=%s\nreason_code=%s\nevidence_digest=%s\nevidence_ref=%s\n' \
-              "${PROTECTED_CONCLUSION}" "${PROTECTED_REASON}" "${PROTECTED_DIGEST}" "${PROTECTED_REF}" >> "${GITHUB_OUTPUT}"
-          fi
-      - name: Enforce selected result
-        env:
-          CONCLUSION: ${{ steps.collect.outputs.conclusion }}
-          EVIDENCE_DIGEST: ${{ steps.collect.outputs.evidence_digest }}
-        run: |
-          set -euo pipefail
-          [[ "${CONCLUSION}" == success ]]
-          [[ "${EVIDENCE_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]

@@ -38,6 +38,12 @@ MAX_REPORT_AGGREGATE_BYTES = 64 * 1024 * 1024
 RETRYABLE_HTTP_STATUS = frozenset({408, 429, 500, 502, 503, 504})
 RETRY_BASE_DELAYS = (0.5, 1.0, 2.0)
 MAX_RETRY_DELAY_SECONDS = 30.0
+# Buildkite build-state polling. A build that has just started settles quickly, so
+# the first polls stay tight; a long build must not hold a GitHub runner in a
+# two-second busy loop for the full hour, so the interval backs off to a cap.
+POLL_INITIAL_DELAY_SECONDS = 2.0
+POLL_MAX_DELAY_SECONDS = 30.0
+POLL_DELAY_GROWTH = 2.0
 REQUEST_TIMEOUT_SECONDS = 15.0
 DEADLINE_EXCEEDED = "Buildkite evidence verification deadline exceeded"
 
@@ -999,6 +1005,7 @@ class BuildkiteClient:
             raise ValueError("--timeout-seconds must be between 1 and 3600")
         deadline = self._clock() + timeout_seconds
         terminal = {"passed", "failed", "canceled", "canceling", "blocked", "skipped", "not_run"}
+        poll_delay = POLL_INITIAL_DELAY_SECONDS
         build_response = self.verify(pipeline, build_id, build_number, expected_commit, deadline)
         while (
             not build_response["blocked"]
@@ -1009,7 +1016,8 @@ class BuildkiteClient:
             remaining = deadline - self._clock()
             if remaining <= 0:
                 raise RuntimeError(DEADLINE_EXCEEDED)
-            self._sleeper(min(2.0, remaining))
+            self._sleeper(min(poll_delay, remaining))
+            poll_delay = min(POLL_MAX_DELAY_SECONDS, poll_delay * POLL_DELAY_GROWTH)
             if self._clock() >= deadline:
                 raise RuntimeError(DEADLINE_EXCEEDED)
             build_response = self.verify(
