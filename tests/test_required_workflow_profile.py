@@ -78,6 +78,18 @@ class RequiredWorkflowProfileTest(unittest.TestCase):
         merge_group = profile.plan(PROFILES, "mindclade/mindclade", "merge_group", HEAD)
         self.assertEqual("buildkite-isolated", merge_group["profile"])
         self.assertIn("review_policy", json.loads(merge_group["not_required_shards_json"]))
+        estate_pull = profile.plan(PROFILES, "mindclade/estate-ci", "pull_request", HEAD)
+        self.assertEqual("buildkite-isolated", estate_pull["profile"])
+        self.assertEqual(
+            ["review_policy", "classify", "dispatch", "buildkite_required"],
+            json.loads(estate_pull["affected_shards_json"]),
+        )
+        estate_merge_group = profile.plan(PROFILES, "mindclade/estate-ci", "merge_group", HEAD)
+        self.assertEqual("buildkite-isolated", estate_merge_group["profile"])
+        self.assertEqual(
+            ["classify", "dispatch", "buildkite_required"],
+            json.loads(estate_merge_group["affected_shards_json"]),
+        )
         with self.assertRaisesRegex(ValueError, "no fixed required-workflow profile"):
             profile.plan(PROFILES, "mindclade/unregistered", "pull_request", HEAD)
 

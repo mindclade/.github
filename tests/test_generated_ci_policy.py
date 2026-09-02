@@ -32,6 +32,22 @@ class GeneratedCIPolicyTest(unittest.TestCase):
         self.assertEqual(systems, manifest["supported_systems"])
         self.assertEqual(revision, manifest["authority"]["revision"])
 
+    def test_profile_catalog_covers_the_fixed_estate_inventory(self) -> None:
+        profiles = json.loads((ROOT / generator.PROFILE_SOURCE).read_text(encoding="utf-8"))
+        repositories = profiles["spec"]["repositories"]
+        self.assertEqual(
+            {
+                "mindclade/.github": "nix-standard",
+                "mindclade/bootstrap": "nix-standard",
+                "mindclade/estate-ci": "buildkite-isolated",
+                "mindclade/github-config": "nix-standard",
+                "mindclade/gitops": "nix-standard",
+                "mindclade/infrastructure-live": "nix-standard",
+                "mindclade/mindclade": "buildkite-isolated",
+            },
+            {repository: definition["profile"] for repository, definition in repositories.items()},
+        )
+
     def test_lock_binds_every_source_and_generated_artifact(self) -> None:
         rendered = generator.render(ROOT, "b" * 40)
         lock = json.loads(rendered[generator.POLICY_LOCK])

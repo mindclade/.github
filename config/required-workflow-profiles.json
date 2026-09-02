@@ -29,6 +29,9 @@
       "mindclade/bootstrap": {
         "profile": "nix-standard"
       },
+      "mindclade/estate-ci": {
+        "profile": "buildkite-isolated"
+      },
       "mindclade/github-config": {
         "profile": "nix-standard"
       },
