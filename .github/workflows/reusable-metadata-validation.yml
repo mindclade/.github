@@ -21,6 +21,15 @@ on:
           LICENSE
           component.yaml
         type: string
+      documentation_paths:
+        description: |-
+          Newline-separated path prefixes treated as documentation. A change under
+          any of them sets the documentation_changed output.
+        required: false
+        default: |-
+          README.md
+          docs/
+        type: string
     outputs:
       correlation_id:
         description: Stable correlation identifier.
@@ -55,6 +64,13 @@ on:
       evidence_ref:
         description: Immutable evidence artifact reference.
         value: ${{ jobs.metadata.outputs.evidence_ref }}
+      documentation_changed:
+        description: |-
+          Whether this revision changes documentation. Callers use it to run
+          documentation validation exactly once in the required graph. It is
+          "true" whenever the answer cannot be determined, so documentation is
+          validated rather than silently skipped.
+        value: ${{ jobs.metadata.outputs.documentation_changed }}
 
 concurrency:
   group: mindclade-org-metadata-${{ github.repository }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -81,6 +97,7 @@ jobs:
       reason_code: ${{ steps.result.outputs.reason_code }}
       evidence_digest: ${{ steps.evidence.outputs.evidence_digest }}
       evidence_ref: ${{ steps.evidence.outputs.evidence_ref }}
+      documentation_changed: ${{ steps.documentation.outputs.documentation_changed }}
     steps:
       - id: context
         name: Validate caller context
@@ -98,6 +115,40 @@ jobs:
         with:
           ref: ${{ inputs.source_revision }}
           persist-credentials: false
+      - id: documentation
+        name: Classify documentation changes
+        if: always()
+        env:
+          BASE_REVISION: ${{ steps.context.outputs.base_revision }}
+          DOCUMENTATION_PATHS: ${{ inputs.documentation_paths }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          set -euo pipefail
+          # Fail safe: any state we cannot classify is reported as changed, so a
+          # caller skips documentation validation only on a definite negative.
+          emit() {
+            printf 'documentation_changed=%s\n' "$1" >> "${GITHUB_OUTPUT}"
+            exit 0
+          }
+          [[ -d .git ]] || emit true
+          [[ "${BASE_REVISION}" =~ ^[0-9a-f]{40}$ ]] || emit true
+          [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]] || emit true
+          [[ "${BASE_REVISION}" != "${SOURCE_REVISION}" ]] || emit false
+          git fetch --no-tags --depth=1 origin "${BASE_REVISION}" >/dev/null 2>&1 || emit true
+          git cat-file -e "${BASE_REVISION}^{commit}" 2>/dev/null || emit true
+          # Two-dot: every path differing between the two trees. Broader than a
+          # merge-base diff, and broad is the safe direction here.
+          changed="$(git diff --name-only "${BASE_REVISION}" "${SOURCE_REVISION}" 2>/dev/null)" || emit true
+          while IFS= read -r prefix; do
+            [[ -n "${prefix}" ]] || continue
+            while IFS= read -r path; do
+              [[ -n "${path}" ]] || continue
+              if [[ "${path}" == "${prefix}"* ]]; then
+                emit true
+              fi
+            done <<< "${changed}"
+          done <<< "${DOCUMENTATION_PATHS}"
+          emit false
       - id: check
         name: Validate repository metadata
         if: steps.context.outcome == 'success' && steps.pins.outcome == 'success'
