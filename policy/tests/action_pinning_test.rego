@@ -29,14 +29,14 @@ test_implementation_and_same_commit_actions_pass if {
 
 test_repository_self_test_local_action_passes if {
 	data.mindclade.workflow.action_pinning.allow with input as {
-		"workflow_path": ".github/workflows/self-test.yml",
+		"workflow_path": ".github/workflows/pull-request.yml",
 		"actions": [{"uses": "./.github/actions/validate-trusted-context"}],
 	}
 }
 
 test_repository_self_test_implementation_action_is_denied if {
 	denials := data.mindclade.workflow.action_pinning.denials with input as {
-		"workflow_path": ".github/workflows/self-test.yml",
+		"workflow_path": ".github/workflows/pull-request.yml",
 		"actions": [{"uses": "$/.github/actions/validate-trusted-context"}],
 	}
 	some violation in denials
@@ -53,7 +53,7 @@ test_caller_checkout_local_action_is_denied if {
 
 test_implementation_action_outside_actions_is_denied if {
 	denials := data.mindclade.workflow.action_pinning.denials with input as {
-		"actions": [{"uses": "$/.github/workflows/self-test.yml"}],
+		"actions": [{"uses": "$/.github/workflows/pull-request.yml"}],
 	}
 	some violation in denials
 	violation.code == "ACTION_REFERENCE_UNAPPROVED"

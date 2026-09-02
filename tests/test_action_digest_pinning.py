@@ -118,7 +118,7 @@ class ActionDigestPinningTest(unittest.TestCase):
     def test_external_actions_require_full_commit_shas(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            workflow = root / ".github/workflows/self-test.yml"
+            workflow = root / ".github/workflows/pull-request.yml"
             workflow.parent.mkdir(parents=True)
             workflow.write_text(
                 "steps:\n  - uses: actions/checkout@v4\n  - uses: ./.github/actions/verify-pinned-actions\n",
@@ -136,7 +136,7 @@ class ActionDigestPinningTest(unittest.TestCase):
     def test_full_sha_is_still_denied_when_action_is_not_allowlisted(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            workflow = root / ".github/workflows/self-test.yml"
+            workflow = root / ".github/workflows/pull-request.yml"
             workflow.parent.mkdir(parents=True)
             workflow.write_text(
                 "steps:\n  - uses: example/unapproved@" + SHA + "\n", encoding="utf-8"
@@ -149,8 +149,13 @@ class ActionDigestPinningTest(unittest.TestCase):
         policy = (Path(__file__).resolve().parents[1] / "policy/action_pinning.rego").read_text(
             encoding="utf-8"
         )
+        allowed_actions = policy.split("allowed_actions := {", 1)[1].split("}\n", 1)[0]
         policy_entries = dict(
-            re.findall(r'^  "([^"]+)": "([^"]+)"(?:,)?(?:\s+#.*)?$', policy, re.MULTILINE)
+            re.findall(
+                r'^[\t ]+"([^"]+)": "([^"]+)"(?:,)?(?:\s+#.*)?$',
+                allowed_actions,
+                re.MULTILINE,
+            )
         )
         self.assertEqual(validator.APPROVED_EXTERNAL_REFERENCES, policy_entries)
         workflow_path = re.search(r'^self_test_workflow_path := "([^"]+)"$', policy, re.MULTILINE)
@@ -256,7 +261,7 @@ class ActionDigestPinningTest(unittest.TestCase):
     def test_local_action_reference_is_bound_to_the_workflow_execution_model(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            workflow = root / ".github/workflows/self-test.yml"
+            workflow = root / ".github/workflows/pull-request.yml"
             workflow.parent.mkdir(parents=True)
             workflow.write_text(
                 "steps:\n  - uses: ./.github/actions/verify-pinned-actions\n", encoding="utf-8"

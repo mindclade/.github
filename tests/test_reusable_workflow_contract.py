@@ -5,6 +5,7 @@ import datetime as dt
 import json
 import os
 import re
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -55,23 +56,81 @@ class ReusableWorkflowContractTest(unittest.TestCase):
     def test_python_and_rego_permission_allowlists_are_identical(self) -> None:
         policy = (ROOT / "policy/workflow_permissions.rego").read_text(encoding="utf-8")
         block = policy.split("allowed_permissions := {", 1)[1].split("}\n", 1)[0]
-        permissions = dict(re.findall(r'^  "([^"]+)": "([^"]+)"(?:,)?$', block, re.MULTILINE))
+        permissions = dict(re.findall(r'^[\t ]+"([^"]+)": "([^"]+)"(?:,)?$', block, re.MULTILINE))
         self.assertEqual(validator.ALLOWED_PERMISSIONS, permissions)
         guard_block = policy.split("protected_tier_guards := {", 1)[1].split("}\n", 1)[0]
         self.assertEqual(
             set(validator.PROTECTED_TIER_GUARDS),
-            set(re.findall(r'^  "([^"]+)"(?:,)?$', guard_block, re.MULTILINE)),
+            set(re.findall(r'^[\t ]+"([^"]+)"(?:,)?$', guard_block, re.MULTILINE)),
         )
 
     def test_repository_matches_the_approved_inventory(self) -> None:
         outcome = validator.validate_inventory(ROOT)
         self.assertTrue(outcome["ok"], outcome["errors"])
-        self.assertEqual(60, outcome["expected"])
+        self.assertEqual(71, outcome["expected"])
         self.assertIn(".github/actionlint.yaml", validator.EXPECTED_INVENTORY)
-        self.assertIn(".github/workflows/self-test.yml", validator.EXPECTED_INVENTORY)
+        self.assertIn(".github/workflows/pull-request.yml", validator.EXPECTED_INVENTORY)
         self.assertIn(
             "policy/tests/reusable_workflow_interface_test.rego", validator.EXPECTED_INVENTORY
         )
+
+    def test_pull_request_workflow_exports_the_governed_required_context(self) -> None:
+        workflow = ROOT / ".github/workflows/pull-request.yml"
+        document, parse_error = validator._parsed_yaml(workflow, ROOT)
+        self.assertIsNone(parse_error)
+        self.assertIsInstance(document, dict)
+        self.assertEqual("Pull request", document["name"])
+        self.assertEqual(
+            {"pull_request", "merge_group", "push", "workflow_dispatch"},
+            set(document["on"]),
+        )
+        self.assertEqual(["main"], document["on"]["push"]["branches"])
+        self.assertEqual({"contents": "read"}, document["permissions"])
+        required = document["jobs"]["required"]
+        self.assertEqual("required", required["name"])
+        self.assertEqual({"contents": "read"}, required["permissions"])
+
+    def test_nix_config_guards_accept_wrapped_and_scalar_values(self) -> None:
+        approved = {
+            "substituters": ["https://cache.nixos.org/"],
+            "trusted-public-keys": [
+                "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="
+            ],
+            "require-sigs": True,
+            "accept-flake-config": False,
+        }
+        fixtures = (
+            approved,
+            {key: {"value": value, "source": "workflow"} for key, value in approved.items()},
+        )
+        workflow_paths = (
+            ".github/workflows/pull-request.yml",
+            ".github/workflows/reusable-nix-validation.yml",
+        )
+        for workflow_path in workflow_paths:
+            source = (ROOT / workflow_path).read_text(encoding="utf-8")
+            jq_filter = source.split("nix config show --json | jq -e '\n", 1)[1].split(
+                "\n          ' >/dev/null", 1
+            )[0]
+            for fixture in fixtures:
+                with self.subTest(workflow=workflow_path, shape=type(fixture["substituters"])):
+                    result = subprocess.run(
+                        ["jq", "-e", jq_filter],
+                        input=json.dumps(fixture),
+                        capture_output=True,
+                        check=False,
+                        text=True,
+                    )
+                    self.assertEqual(0, result.returncode, result.stderr)
+            rejected = {**approved, "accept-flake-config": True}
+            result = subprocess.run(
+                ["jq", "-e", jq_filter],
+                input=json.dumps(rejected),
+                capture_output=True,
+                check=False,
+                text=True,
+            )
+            self.assertNotEqual(0, result.returncode)
 
     def test_complete_validator_accepts_the_real_repository(self) -> None:
         outcome = validator.validate(ROOT)
@@ -181,6 +240,16 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             outcome = validator.validate_inventory(root)
             self.assertFalse(outcome["ok"])
             self.assertIn("unexpected: BLUEPRINT.md", outcome["errors"])
+            (root / "BLUEPRINT.md").unlink()
+            for name in ("bazel-bin", "bazel-out", "bazel-testlogs", f"bazel-{root.name}"):
+                (root / name).symlink_to(root / "missing-bazel-output")
+            self.assertTrue(validator.validate_inventory(root)["ok"])
+            previous_directory = Path.cwd()
+            try:
+                os.chdir(root)
+                self.assertTrue(validator.validate_inventory(Path("."))["ok"])
+            finally:
+                os.chdir(previous_directory)
 
     def test_context_interface_writes_all_contract_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -287,7 +356,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            workflow = root / ".github/workflows/self-test.yml"
+            workflow = root / ".github/workflows/pull-request.yml"
             workflow.parent.mkdir(parents=True)
             workflow.write_text(
                 "on: [push]\npermissions: {}\njobs:\n  test:\n    runs-on: ubuntu-24.04\n",
@@ -351,7 +420,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
     def test_action_policy_rejects_ambiguous_yaml_spellings(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            workflow = root / ".github/workflows/self-test.yml"
+            workflow = root / ".github/workflows/pull-request.yml"
             workflow.parent.mkdir(parents=True)
             rejected = (
                 'on: [push]\npermissions: {}\nsteps:\n  - "uses": actions/checkout@main\n',
@@ -389,7 +458,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            workflow = root / ".github/workflows/self-test.yml"
+            workflow = root / ".github/workflows/pull-request.yml"
             workflow.parent.mkdir(parents=True)
             for expression in expressions:
                 with self.subTest(expression=expression):
@@ -487,7 +556,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             root = Path(temporary)
             workflows = root / ".github/workflows"
             workflows.mkdir(parents=True)
-            (workflows / "self-test.yml").write_text(
+            (workflows / "pull-request.yml").write_text(
                 "on: [push]\npermissions: {}\n", encoding="utf-8"
             )
             outcome = validator.validate(
@@ -508,12 +577,12 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             first_root = Path(first)
             second_root = Path(second)
             for root in (first_root, second_root):
-                workflow = root / ".github/workflows/self-test.yml"
+                workflow = root / ".github/workflows/pull-request.yml"
                 workflow.parent.mkdir(parents=True)
                 workflow.write_text("on: [push]\npermissions: {}\n", encoding="utf-8")
             baseline = validator.source_closure_digest(first_root)
             self.assertEqual(baseline, validator.source_closure_digest(second_root))
-            (second_root / ".github/workflows/self-test.yml").write_text(
+            (second_root / ".github/workflows/pull-request.yml").write_text(
                 "on: [pull_request]\npermissions: {}\n", encoding="utf-8"
             )
             self.assertNotEqual(baseline, validator.source_closure_digest(second_root))
@@ -879,7 +948,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                         "GITHUB_REPOSITORY": "mindclade/.github",
                         "GITHUB_ACTOR": "mindclade-bot",
                         "GITHUB_REF": "refs/heads/feature",
-                        "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/self-test.yml@"
+                        "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/pull-request.yml@"
                         + SHA,
                         "GITHUB_REF_PROTECTED": "false",
                     }
@@ -914,7 +983,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                         "GITHUB_REPOSITORY": "mindclade/.github",
                         "GITHUB_ACTOR": "mindclade-bot",
                         "GITHUB_REF": "refs/pull/42/merge",
-                        "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/self-test.yml@"
+                        "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/pull-request.yml@"
                         + SHA,
                     }
                 )
@@ -952,7 +1021,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                         "GITHUB_REPOSITORY": "mindclade/.github",
                         "GITHUB_ACTOR": "dependabot[bot]",
                         "GITHUB_REF": "refs/pull/43/merge",
-                        "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/self-test.yml@"
+                        "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/pull-request.yml@"
                         + SHA,
                     }
                 )
@@ -981,7 +1050,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                         "GITHUB_ACTOR": "mindclade-bot",
                         "GITHUB_REF": "refs/heads/gh-readonly-queue/main/pr-42-" + SHA[:8],
                         "GITHUB_REF_PROTECTED": "true",
-                        "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/self-test.yml@"
+                        "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/pull-request.yml@"
                         + SHA,
                     }
                 )
@@ -1017,7 +1086,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                         "GITHUB_ACTOR": "release-bot",
                         "GITHUB_REF": "refs/tags/v1.2.3",
                         "GITHUB_REF_PROTECTED": "true",
-                        "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/self-test.yml@"
+                        "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/pull-request.yml@"
                         + SHA,
                     }
                 )
@@ -1055,7 +1124,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                         "GITHUB_ACTOR": "release-bot",
                         "GITHUB_REF": "refs/tags/v1.2.3",
                         "GITHUB_REF_PROTECTED": "true",
-                        "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/self-test.yml@"
+                        "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/pull-request.yml@"
                         + SHA,
                     }
                 )

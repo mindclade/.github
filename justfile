@@ -40,7 +40,7 @@ workflows:
     {{ bazel }} build --config=ci --symlink_prefix=/ //:workflow_lint
 
 flake-check:
-    nix flake check --no-build --no-update-lock-file
+    nix flake check --no-accept-flake-config --no-build --no-update-lock-file
 
 check: format-check lint policy workflows test flake-check
 

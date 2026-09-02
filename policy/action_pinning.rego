@@ -17,7 +17,7 @@ allowed_actions := {
 	"docker://ghcr.io/ossf/scorecard-action": "sha256:ae5104dd3cc28466ebeb11144354be4cac4b7ff829654f9fab89021d71c46670",
 }
 
-self_test_workflow_path := ".github/workflows/self-test.yml"
+self_test_workflow_path := ".github/workflows/pull-request.yml"
 
 action_entries := input.actions if {
 	is_array(input.actions)

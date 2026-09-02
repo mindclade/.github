@@ -1,4 +1,4 @@
-name: Organization workflow self-test
+name: Pull request
 
 on:
   pull_request:
@@ -9,19 +9,26 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: mindclade-org-self-test-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+  group: mindclade-org-pull-request-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
-  self_test:
-    name: Mindclade / Organization Workflow Self-Test
+  required:
+    name: required
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
+    env:
+      NIX_CONFIG: |
+        experimental-features = nix-command flakes
+        accept-flake-config = false
+        substituters = https://cache.nixos.org/
+        trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
+        require-sigs = true
     steps:
       - name: Check out exact source revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -59,16 +66,25 @@ jobs:
         run: |
           set -euo pipefail
           nix --version
-          nix build --no-update-lock-file .#toolchain
-          nix flake check --no-update-lock-file --print-build-logs
+          nix config show --json | jq -e '
+            def config_value:
+              if type == "object" and has("value") then .value else . end;
+            (.substituters | config_value) == ["https://cache.nixos.org/"] and
+            (."trusted-public-keys" | config_value) ==
+              ["cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="] and
+            (."require-sigs" | config_value) == true and
+            (."accept-flake-config" | config_value) == false
+          ' >/dev/null
+          nix build --no-accept-flake-config --no-update-lock-file .#toolchain
+          nix flake check --no-accept-flake-config --no-update-lock-file --print-build-logs
       - name: Run repository validation through the locked CI shell
-        run: nix develop --no-update-lock-file .#ci --command just ci
+        run: nix develop --no-accept-flake-config --no-update-lock-file .#ci --command just ci
       - name: Verify internal template pins on approved main
         env:
           APPROVED_MAIN_REVISION: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
         run: |
           set -euo pipefail
-          nix develop --no-update-lock-file .#ci --command \
+          nix develop --no-accept-flake-config --no-update-lock-file .#ci --command \
             python3 tools/validate_reusable_workflows.py template-pins \
             --root "${GITHUB_WORKSPACE}" \
             --approved-main-revision "${APPROVED_MAIN_REVISION}"

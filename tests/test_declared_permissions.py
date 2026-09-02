@@ -25,7 +25,7 @@ class DeclaredPermissionsTest(unittest.TestCase):
             root = Path(temporary)
             workflows = root / ".github/workflows"
             workflows.mkdir(parents=True)
-            workflow = workflows / "self-test.yml"
+            workflow = workflows / "pull-request.yml"
             workflow.write_text("on: [pull_request]\npermissions: write-all\n", encoding="utf-8")
             outcome = validator.validate_permissions(root)
             self.assertFalse(outcome["ok"])
@@ -432,7 +432,7 @@ class DeclaredPermissionsTest(unittest.TestCase):
                 "source_revision": "a" * 40,
                 "base_revision": "b" * 40,
                 "repository": "mindclade/.github",
-                "workflow_ref": ".github/workflows/self-test.yml",
+                "workflow_ref": ".github/workflows/pull-request.yml",
                 "workflow_revision": "a" * 40,
             }
             args = argparse.Namespace(
@@ -589,7 +589,7 @@ class DeclaredPermissionsTest(unittest.TestCase):
                     "source_revision": "a" * 40,
                     "base_revision": "b" * 40,
                     "repository": "mindclade/.github",
-                    "workflow_ref": ".github/workflows/self-test.yml",
+                    "workflow_ref": ".github/workflows/pull-request.yml",
                     "workflow_revision": "c" * 40,
                 }
                 args = argparse.Namespace(

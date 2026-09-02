@@ -25,7 +25,7 @@ IMPLEMENTATION_ACTION = re.compile(
 SELF_TEST_LOCAL_ACTION = re.compile(
     r"^\./\.github/actions/[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
 )
-SELF_TEST_WORKFLOW_PATH = ".github/workflows/self-test.yml"
+SELF_TEST_WORKFLOW_PATH = ".github/workflows/pull-request.yml"
 REQUIRED_CHECK_WORKFLOW_PATH = ".github/workflows/reusable-required-check.yml"
 BUILDKITE_DISPATCH_WORKFLOW_PATH = ".github/workflows/reusable-buildkite-dispatch.yml"
 BUILDKITE_BRIDGE_TEMPLATE_PATH = "workflow-templates/buildkite-bridge.yml"
@@ -140,7 +140,7 @@ EXPECTED_INVENTORY = frozenset(
         ".github/workflows/reusable-dependency-review.yml",
         ".github/workflows/reusable-codeql.yml",
         ".github/workflows/reusable-scorecard.yml",
-        ".github/workflows/self-test.yml",
+        ".github/workflows/pull-request.yml",
         ".github/ISSUE_TEMPLATE/bug.yml",
         ".github/ISSUE_TEMPLATE/security-control-gap.yml",
         ".github/ISSUE_TEMPLATE/architecture-change.yml",
@@ -172,7 +172,11 @@ EXPECTED_INVENTORY = frozenset(
         "tools/validate_reusable_workflows.py",
         "tools/emit_ci_evidence.py",
         "BUILD.bazel",
+        ".bazelignore",
+        ".bazelrc",
+        ".bazelversion",
         "MODULE.bazel",
+        "MODULE.bazel.lock",
         "component.yaml",
         "flake.lock",
         "flake.nix",
@@ -670,10 +674,19 @@ def files(root: Path, patterns: Iterable[str]) -> list[Path]:
 
 
 def inventory_files(root: Path) -> dict[str, Path]:
+    root = root.resolve()
     observed: dict[str, Path] = {}
+    bazel_output_roots = {
+        "bazel-bin",
+        "bazel-out",
+        "bazel-testlogs",
+        f"bazel-{root.name}",
+    }
     for path in root.rglob("*"):
         relative = path.relative_to(root)
         if any(part in IGNORED_INVENTORY_PARTS for part in relative.parts):
+            continue
+        if len(relative.parts) == 1 and path.is_symlink() and relative.name in bazel_output_roots:
             continue
         if path.suffix == ".pyc":
             continue

@@ -1,7 +1,13 @@
 {
   description = "Pinned system toolchain for github.com/mindclade/.github";
 
-  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+  nixConfig = {
+    substituters = [ "https://cache.nixos.org/" ];
+    trusted-public-keys = [ "cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=" ];
+    require-sigs = true;
+  };
+
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/83199d0d373dd3ac2b9a1996b1d0263f76ab7a4c";
 
   outputs =
     { self, nixpkgs }:
@@ -63,10 +69,91 @@
               }
             } "$out/bin/opa"
           '';
+          bazelRuntimeInputs =
+            with pkgs;
+            [
+              bash
+              bazel_9
+              bzip2
+              cacert
+              coreutils
+              curl
+              diffutils
+              file
+              findutils
+              gawk
+              git
+              gnugrep
+              gnumake
+              gnused
+              gnutar
+              gzip
+              jdk21_headless
+              jq
+              openssl.bin
+              openssh
+              patch
+              stdenv.cc
+              unzip
+              which
+              xz
+              zip
+            ]
+            ++ lib.optionals stdenv.hostPlatform.isDarwin [
+              darwin.cctools
+              darwin.cctools.libtool
+            ];
+          bazel = pkgs.writeShellApplication {
+            name = "bazel";
+            runtimeInputs = bazelRuntimeInputs;
+            text = ''
+              export PATH=${pkgs.lib.makeBinPath bazelRuntimeInputs}
+              export JAVA_HOME=${pkgs.jdk21_headless}
+              export CC=${pkgs.stdenv.cc}/bin/cc
+              export CXX=${pkgs.stdenv.cc}/bin/c++
+              export BAZEL_LINKOPTS=${pkgs.lib.escapeShellArg (pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin "-L${pkgs.darwin.libresolv}/lib")}
+              export LANG=C
+              export LC_ALL=C
+              export TZ=UTC
+              if [[ "''${1:-}" == "--version" ]]; then
+                printf 'bazel %s\n' '${pkgs.bazel_9.version}'
+                exit 0
+              fi
+              startup_flags=(--nosystem_rc --nohome_rc --server_javabase=${pkgs.jdk21_headless})
+              if [[ -n "''${BAZEL_OUTPUT_USER_ROOT:-}" ]]; then
+                startup_flags+=(--output_user_root="''${BAZEL_OUTPUT_USER_ROOT}")
+              fi
+              exec ${pkgs.bazel_9}/bin/bazel "''${startup_flags[@]}" "$@"
+            '';
+          };
+          moduleLock = "${self}/MODULE.bazel.lock";
+          toolchainManifest = pkgs.writeTextDir "share/mindclade/toolchain-manifest.json" (
+            builtins.toJSON {
+              schema_version = "mindclade-toolchain.v1";
+              repository = "mindclade/.github";
+              inherit system;
+              nixpkgs = {
+                revision = nixpkgs.rev;
+                nar_hash = nixpkgs.narHash;
+              };
+              flake_lock_sha256 = builtins.hashFile "sha256" "${self}/flake.lock";
+              module_lock_sha256 =
+                if builtins.pathExists moduleLock then builtins.hashFile "sha256" moduleLock else null;
+              bazel = {
+                version = pkgs.bazel_9.version;
+                store_path = "${pkgs.bazel_9}";
+              };
+              startup_jdk = {
+                version = pkgs.jdk21_headless.version;
+                store_path = "${pkgs.jdk21_headless}";
+              };
+              native_cc_store_path = "${pkgs.stdenv.cc}";
+            }
+          );
           toolchainPackages = with pkgs; [
             actionlint
             bash
-            bazelisk
+            bazel
             biome
             buildifier
             cacert
@@ -81,8 +168,9 @@
             gzip
             jq
             just
+            jdk21_headless
             markdownlint-cli2
-            nixfmt-rfc-style
+            nixfmt
             nodejs_24
             opa
             pre-commit
@@ -94,6 +182,8 @@
             ruff
             shellcheck
             shfmt
+            stdenv.cc
+            toolchainManifest
             unzip
             yamllint
             yq-go
@@ -110,6 +200,7 @@
         in
         {
           inherit toolchain;
+          "toolchain-manifest" = toolchainManifest;
           default = toolchain;
         }
       );
@@ -118,12 +209,15 @@
         system: pkgs:
         let
           toolchain = self.packages.${system}.toolchain;
+          locale = if pkgs.stdenv.hostPlatform.isDarwin then "en_US.UTF-8" else "C.UTF-8";
           common = {
             packages = [ toolchain ];
-            LANG = "C.UTF-8";
-            LC_ALL = "C.UTF-8";
+            JAVA_HOME = "${pkgs.jdk21_headless}";
+            CC = "${pkgs.stdenv.cc}/bin/cc";
+            CXX = "${pkgs.stdenv.cc}/bin/c++";
+            LANG = locale;
+            LC_ALL = locale;
             TZ = "UTC";
-            USE_BAZEL_VERSION = "9.2.0";
           };
         in
         {
@@ -132,7 +226,7 @@
         }
       );
 
-      formatter = forAllSystems (_: pkgs: pkgs.nixfmt-rfc-style);
+      formatter = forAllSystems (_: pkgs: pkgs.nixfmt);
 
       checks = forAllSystems (
         system: pkgs:
@@ -153,14 +247,16 @@
                 test "$(pre-commit --version)" = "pre-commit 4.5.1"
                 test "$(pyright --version)" = "pyright 1.1.412"
                 test "$(ruff --version)" = "ruff 0.16.4"
-                test "$(shfmt --version)" = "v3.13.1"
-                test "$(actionlint -version)" = "1.7.12"
+                test "$(shfmt --version)" = "3.13.1"
+                test "$(actionlint -version | head -n1)" = "1.7.12"
                 test "$(just --version)" = "just 1.58.0"
-                test "$(opa version --format json | jq -r .version)" = "1.20.1"
+                test "$(opa version | awk '/^Version:/ {print $2}')" = "1.20.1"
                 test "$(python3 -c 'import platform; print(platform.python_version())')" = "3.13.15"
-                test "${pkgs.bazelisk.version}" = "1.29.0"
-                grep -Fq '>=9.2.0' ${self}/MODULE.bazel
-                grep -Fq '<9.3.0' ${self}/MODULE.bazel
+                test "$(bazel --version)" = "bazel 9.1.1"
+                grep -Fq '>=9.1.1' ${self}/MODULE.bazel
+                grep -Fq '<=9.1.1' ${self}/MODULE.bazel
+                jq -e '.schema_version == "mindclade-toolchain.v1" and .bazel.version == "9.1.1"' \
+                  ${toolchain}/share/mindclade/toolchain-manifest.json >/dev/null
                 mkdir -p "$out"
                 printf '%s\n' '${nixpkgs.rev}' > "$out/nixpkgs-revision"
               '';

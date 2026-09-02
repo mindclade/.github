@@ -55,6 +55,13 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+    env:
+      NIX_CONFIG: |
+        experimental-features = nix-command flakes
+        accept-flake-config = false
+        substituters = https://cache.nixos.org/
+        trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
+        require-sigs = true
     outputs:
       correlation_id: ${{ steps.context.outputs.correlation_id }}
       source_revision: ${{ inputs.source_revision }}
@@ -112,9 +119,18 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          nix build --no-update-lock-file .#toolchain
-          nix flake check --no-update-lock-file --print-build-logs
-          nix develop --no-update-lock-file .#ci --command just ci
+          nix config show --json | jq -e '
+            def config_value:
+              if type == "object" and has("value") then .value else . end;
+            (.substituters | config_value) == ["https://cache.nixos.org/"] and
+            (."trusted-public-keys" | config_value) ==
+              ["cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY="] and
+            (."require-sigs" | config_value) == true and
+            (."accept-flake-config" | config_value) == false
+          ' >/dev/null
+          nix build --no-accept-flake-config --no-update-lock-file .#toolchain
+          nix flake check --no-accept-flake-config --no-update-lock-file --print-build-logs
+          nix develop --no-accept-flake-config --no-update-lock-file .#ci --command just ci
       - id: result
         name: Normalize result
         if: always()

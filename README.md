@@ -20,10 +20,12 @@ The repository remains pre-production until connected activation is explicitly a
 The repository-local `flake.nix` and `flake.lock` are the sole system-toolchain authority for supported `aarch64-darwin` and `x86_64-linux` hosts. They expose the reviewed `packages.toolchain`, identical default/CI tool closures, formatter, and toolchain/source checks while leaving Bazel and its module graph authoritative for build inputs. From a clean checkout, run:
 
 ```bash
-nix build --no-update-lock-file .#toolchain
-nix flake check --no-update-lock-file
-nix develop --no-update-lock-file .#ci --command just ci
+nix build --no-accept-flake-config --no-update-lock-file .#toolchain
+nix flake check --no-accept-flake-config --no-update-lock-file
+nix develop --no-accept-flake-config --no-update-lock-file .#ci --command just ci
 ```
+
+Remote Bazel execution and remote caching are intentionally disabled. They may be enabled only for workers with the exact reviewed Nix store paths or an immutable, digest-pinned image built from this toolchain closure.
 
 The root developer-quality interface is `just format`, `just format-check`,
 `just lint`, and `just check`. Formatting is limited to handwritten source and
