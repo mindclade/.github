@@ -896,6 +896,50 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             self.assertEqual("untrusted", outcome["context"]["source_trust"])
             self.assertEqual("untrusted", outcome["context"]["execution_tier"])
 
+    def test_context_maps_review_refresh_to_the_pull_request_head(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            event = Path(temporary) / "event.json"
+            event.write_text(
+                json.dumps(
+                    {
+                        "pull_request": {
+                            "head": {
+                                "sha": SHA,
+                                "ref": "feature/review-refresh",
+                                "repo": {"fork": False},
+                            },
+                            "base": {"sha": "b" * 40},
+                        },
+                        "review": {"state": "approved"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            old_environment = os.environ.copy()
+            try:
+                os.environ.update(
+                    {
+                        "GITHUB_EVENT_NAME": "pull_request_review",
+                        "GITHUB_ACTOR": "mindclade-bot",
+                        "GITHUB_REF": "refs/pull/7/merge",
+                        "GITHUB_REF_PROTECTED": "false",
+                        "GITHUB_REPOSITORY": "mindclade/.github",
+                        "GITHUB_SHA": "c" * 40,
+                        "GITHUB_WORKFLOW_REF": (
+                            "mindclade/.github/.github/workflows/pull-request.yml@" + SHA
+                        ),
+                    }
+                )
+                outcome = validator.trusted_context(event, SHA, {"untrusted"})
+            finally:
+                os.environ.clear()
+                os.environ.update(old_environment)
+            self.assertEqual("allow", outcome["verdict"])
+            self.assertEqual(SHA, outcome["context"]["source_revision"])
+            self.assertEqual("refs/heads/feature/review-refresh", outcome["context"]["ref"])
+            self.assertEqual("trusted", outcome["context"]["source_trust"])
+            self.assertEqual("untrusted", outcome["context"]["execution_tier"])
+
     def test_context_rejects_ambiguous_pull_request_fork_provenance(self) -> None:
         ambiguous_repositories = (None, {}, {"fork": None}, {"fork": "false"})
         for repository in ambiguous_repositories:

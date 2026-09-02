@@ -2163,6 +2163,7 @@ def validate_context_schema(
         errors.append("actor is invalid")
     if context.get("event_name") not in {
         "pull_request",
+        "pull_request_review",
         "push",
         "release",
         "schedule",
@@ -2194,10 +2195,10 @@ def validate_context_schema(
     if context.get("execution_tier") not in {"untrusted", "trusted", "release"}:
         errors.append("execution_tier is invalid")
     if (
-        context.get("event_name") in {"pull_request", "merge_group"}
+        context.get("event_name") in {"pull_request", "pull_request_review", "merge_group"}
         and context.get("execution_tier") != "untrusted"
     ):
-        errors.append("pull_request and merge_group must use untrusted execution tier")
+        errors.append("pull-request and merge-group events must use untrusted execution tier")
     if context.get("event_name") == "release" and (
         context.get("execution_tier") != "release"
         or context.get("source_trust") != "protected"
@@ -2239,7 +2240,7 @@ def trusted_context(
         or None
     )
     fork_provenance_ambiguous = False
-    if event_name == "pull_request":
+    if event_name in {"pull_request", "pull_request_review"}:
         head_repository = _nested(payload, "pull_request", "head", "repo")
         observed_fork = head_repository.get("fork") if isinstance(head_repository, dict) else None
         if type(observed_fork) is not bool:
@@ -2255,14 +2256,14 @@ def trusted_context(
     head_ref = _nested(payload, "pull_request", "head", "ref")
     context_ref = os.environ.get("GITHUB_REF", "")
     if (
-        event_name == "pull_request"
+        event_name in {"pull_request", "pull_request_review"}
         and isinstance(head_ref, str)
         and re.fullmatch(r"[A-Za-z0-9._/-]+", head_ref)
     ):
         context_ref = "refs/heads/" + head_ref
     ref_protected = os.environ.get("GITHUB_REF_PROTECTED", "").lower() == "true"
     release = payload.get("release") if isinstance(payload.get("release"), dict) else {}
-    if event_name in {"pull_request", "merge_group"}:
+    if event_name in {"pull_request", "pull_request_review", "merge_group"}:
         execution_tier = "untrusted"
     elif event_name == "release":
         execution_tier = "release"
@@ -2272,7 +2273,7 @@ def trusted_context(
         execution_tier = "untrusted"
     if event_name == "release":
         source_trust = "protected"
-    elif event_name == "pull_request":
+    elif event_name in {"pull_request", "pull_request_review"}:
         # A protected base ref says nothing about pull-request head
         # provenance, so it must never elevate the source classification.
         source_trust = "untrusted" if fork else "trusted"
