@@ -1,0 +1,92 @@
+name: Estate health refresh
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_revision:
+        description: Exact protected mindclade/.github main SHA bound by the approved request
+        required: true
+        type: string
+      evidence_digest:
+        description: Exact approved operation evidence digest
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      execution_tier: ${{ steps.context.outputs.execution_tier }}
+    steps:
+      - id: context
+        name: Validate trusted release context
+        uses: mindclade/.github/.github/actions/validate-trusted-context@aabf14ba287eb3453cf9f42e19674df308564d1b
+        with:
+          expected-source-revision: ${{ inputs.source_revision }}
+      - name: Verify immutable implementation closure
+        uses: mindclade/.github/.github/actions/verify-pinned-actions@aabf14ba287eb3453cf9f42e19674df308564d1b
+      - name: Enforce the estate health authority boundary
+        env:
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          set -euo pipefail
+          [[ "${GITHUB_REPOSITORY}" == "mindclade/.github" ]]
+          [[ "${GITHUB_REF}" == "refs/heads/main" ]]
+          [[ "${GITHUB_SHA}" == "${SOURCE_REVISION}" ]]
+
+  collect:
+    needs: prepare
+    if: needs.prepare.outputs.execution_tier == 'trusted' || needs.prepare.outputs.execution_tier == 'release'
+    permissions:
+      contents: read
+      id-token: write
+    environment: estate-health
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out the bound workflow source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.source_revision }}
+      - name: Authenticate the exact health producer identity
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: ${{ vars.ESTATE_HEALTH_WIF_PROVIDER }}
+          service_account: ${{ vars.ESTATE_HEALTH_SERVICE_ACCOUNT }}
+          create_credentials_file: true
+          export_environment_variables: true
+      - name: Install the reviewed Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+      - name: Collect and publish one create-only snapshot
+        env:
+          ESTATE_OBSERVER_APP_ID: ${{ vars.ESTATE_OBSERVER_APP_ID }}
+          ESTATE_OBSERVER_INSTALLATION_ID: ${{ vars.ESTATE_OBSERVER_INSTALLATION_ID }}
+          ESTATE_OBSERVER_KEY_VERSION: ${{ vars.ESTATE_OBSERVER_KEY_VERSION }}
+          ESTATE_HEALTH_BUCKET: ${{ vars.ESTATE_HEALTH_BUCKET }}
+          PROTECTED_MAIN_SHA: ${{ inputs.source_revision }}
+          EVIDENCE_DIGEST: ${{ inputs.evidence_digest }}
+        run: |
+          set -euo pipefail
+          private_dir="$(mktemp -d)"
+          trap 'rm -rf "${private_dir}"' EXIT
+          private_key="${private_dir}/observer.pem"
+          gcloud secrets versions access "${ESTATE_OBSERVER_KEY_VERSION}" > "${private_key}"
+          chmod 0600 "${private_key}"
+          gcs_access_token="$(gcloud auth print-access-token)"
+          echo "::add-mask::${gcs_access_token}"
+          GCS_ACCESS_TOKEN="${gcs_access_token}" python3 tools/collect_estate_health.py \
+            --app-id "${ESTATE_OBSERVER_APP_ID}" \
+            --installation-id "${ESTATE_OBSERVER_INSTALLATION_ID}" \
+            --private-key-file "${private_key}" \
+            --protected-main-sha "${PROTECTED_MAIN_SHA}" \
+            --evidence-digest "${EVIDENCE_DIGEST}" \
+            --health-bucket "${ESTATE_HEALTH_BUCKET}"

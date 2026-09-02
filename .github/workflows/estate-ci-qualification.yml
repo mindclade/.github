@@ -1,0 +1,45 @@
+name: Estate CI qualification
+
+on:
+  workflow_dispatch:
+    inputs:
+      protected_main_sha:
+        description: Exact protected mindclade/.github main SHA
+        required: true
+        type: string
+      scenario:
+        description: Fixed qualification behavior
+        required: true
+        type: choice
+        options:
+          - fail-once
+          - wait-for-cancel
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  exercise:
+    if: github.repository == 'mindclade/.github' && github.ref == 'refs/heads/main' && github.sha == inputs.protected_main_sha
+    environment: estate-health
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Exercise the fixed qualification scenario
+        env:
+          SCENARIO: ${{ inputs.scenario }}
+        run: |
+          set -euo pipefail
+          if [[ "${SCENARIO}" == "fail-once" ]]; then
+            if [[ "${GITHUB_RUN_ATTEMPT}" == "1" ]]; then
+              exit 42
+            fi
+            exit 0
+          fi
+          for _ in $(seq 1 20); do
+            sleep 30
+          done
