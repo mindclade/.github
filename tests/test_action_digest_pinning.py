@@ -270,14 +270,19 @@ class ActionDigestPinningTest(unittest.TestCase):
             workflow.write_text(
                 "steps:\n  - uses: $/.github/actions/verify-pinned-actions\n", encoding="utf-8"
             )
-            self.assertTrue(validator.validate_pins(root)["ok"])
+            invalid_dollar_root = validator.validate_pins(root)
+            self.assertFalse(invalid_dollar_root["ok"])
+            self.assertIn("invalid GitHub Actions uses reference", invalid_dollar_root["errors"][0])
 
             workflow.write_text(
                 "steps:\n  - uses: ./.github/actions/verify-pinned-actions\n", encoding="utf-8"
             )
             reusable = root / ".github/workflows/reusable-example.yml"
             reusable.write_text(
-                "steps:\n  - uses: $/.github/actions/verify-pinned-actions\n", encoding="utf-8"
+                "steps:\n  - uses: mindclade/.github/.github/actions/verify-pinned-actions@"
+                + SHA
+                + "\n",
+                encoding="utf-8",
             )
             self.assertTrue(validator.validate_pins(root)["ok"])
             reusable.write_text(
@@ -289,7 +294,7 @@ class ActionDigestPinningTest(unittest.TestCase):
             )
             invalid = validator.validate_pins(root)
             self.assertFalse(invalid["ok"])
-            self.assertIn("invalid implementation action reference", invalid["errors"][0])
+            self.assertIn("invalid GitHub Actions uses reference", invalid["errors"][0])
             reusable.write_text(
                 "steps:\n  - uses: $/.github/actions//verify-pinned-actions\n", encoding="utf-8"
             )
@@ -298,6 +303,13 @@ class ActionDigestPinningTest(unittest.TestCase):
                 "steps:\n  - uses: $/other-root/actions/verify-pinned-actions\n", encoding="utf-8"
             )
             self.assertFalse(validator.validate_pins(root)["ok"])
+
+    def test_repository_rejects_dollar_root_action_references(self) -> None:
+        for workflow in sorted(
+            (Path(__file__).resolve().parents[1] / ".github/workflows").glob("*.yml")
+        ):
+            with self.subTest(workflow=workflow.name):
+                self.assertNotIn("uses: $/", workflow.read_text(encoding="utf-8"))
 
     def test_buildkite_client_uses_fixed_api_and_injectable_transport(self) -> None:
         observed: dict[str, object] = {}

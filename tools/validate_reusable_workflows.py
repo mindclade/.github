@@ -19,12 +19,12 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 SHA = re.compile(r"^[0-9a-f]{40}$")
-IMPLEMENTATION_ACTION = re.compile(
-    r"^\$/\.github/actions/[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
-)
 SELF_TEST_LOCAL_ACTION = re.compile(
     r"^\./\.github/actions/[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
 )
+TRUSTED_CONTEXT_ACTION = "mindclade/.github/.github/actions/validate-trusted-context@aabf14ba287eb3453cf9f42e19674df308564d1b"
+PIN_VERIFICATION_ACTION = "mindclade/.github/.github/actions/verify-pinned-actions@aabf14ba287eb3453cf9f42e19674df308564d1b"
+REQUIRED_PROFILE_ACTION = "mindclade/.github/.github/actions/required-workflow-profile@937568659eac9f7fb84d040e6c3fb9341618ed14"
 SELF_TEST_WORKFLOW_PATH = ".github/workflows/pull-request.yml"
 REQUIRED_CHECK_WORKFLOW_PATH = ".github/workflows/reusable-required-check.yml"
 BUILDKITE_DISPATCH_WORKFLOW_PATH = ".github/workflows/reusable-buildkite-dispatch.yml"
@@ -56,7 +56,7 @@ DOCUMENTATION_REQUIRED_HEADINGS = {
     "profile/README.md": frozenset({"Activation boundary"}),
 }
 APPROVED_SCORECARD_WORKFLOW_SHA256 = (
-    "4b3bc05348f5cc7ec69c74348c6ff28441d543ed64296a70c06d4850d82102e7"
+    "b8853d958f425c4b2c05de9ddec4ad64492767cc85558acad68b64d40c37693e"
 )
 COMMON_WORKFLOW_OUTPUTS = (
     "correlation_id",
@@ -831,9 +831,7 @@ def _pin_reference_error(relative: Path, reference: Any) -> str | None:
             return None
         return f"{relative}: caller-checkout local action reference is forbidden: {reference}"
     if reference.startswith("$/"):
-        if IMPLEMENTATION_ACTION.fullmatch(reference) and ".." not in reference.split("/"):
-            return None
-        return f"{relative}: invalid implementation action reference {reference}"
+        return f"{relative}: invalid GitHub Actions uses reference {reference}"
     if "@" not in reference:
         return f"{relative}: unpinned uses reference {reference}"
     source, revision = reference.rsplit("@", 1)
@@ -1020,7 +1018,7 @@ def _has_trusted_context_producer(document: Any, jobs: Any) -> bool:
     context = context_steps[0]
     if context is not steps[0]:
         return False
-    if context.get("uses") != "$/.github/actions/validate-trusted-context":
+    if context.get("uses") != TRUSTED_CONTEXT_ACTION:
         return False
     if context.get("continue-on-error", False) is not False or "if" in context or "env" in context:
         return False
@@ -1033,7 +1031,7 @@ def _has_trusted_context_producer(document: Any, jobs: Any) -> bool:
     pin_steps = [
         step
         for step in steps
-        if isinstance(step, dict) and step.get("uses") == "$/.github/actions/verify-pinned-actions"
+        if isinstance(step, dict) and step.get("uses") == PIN_VERIFICATION_ACTION
     ]
     if len(pin_steps) != 1:
         return False
@@ -1623,7 +1621,7 @@ def _organization_required_errors(document: dict[str, Any], relative: Path) -> l
         for step in profile_steps or []
         if isinstance(step, dict) and "uses" in step
     ]
-    if profile_uses != ["$/.github/actions/required-workflow-profile"]:
+    if profile_uses != [REQUIRED_PROFILE_ACTION]:
         errors.append(f"{prefix} profile must use only the immutable fixed-profile action")
     reusable_jobs = {
         name: jobs[name]

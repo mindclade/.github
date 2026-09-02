@@ -95,13 +95,13 @@ jobs:
       - id: context
         name: Validate caller context
         continue-on-error: true
-        uses: $/.github/actions/validate-trusted-context
+        uses: mindclade/.github/.github/actions/validate-trusted-context@aabf14ba287eb3453cf9f42e19674df308564d1b
         with:
           expected-source-revision: ${{ inputs.source_revision }}
       - id: pins
         name: Verify immutable implementation closure
         continue-on-error: true
-        uses: $/.github/actions/verify-pinned-actions
+        uses: mindclade/.github/.github/actions/verify-pinned-actions@aabf14ba287eb3453cf9f42e19674df308564d1b
       - id: definition
         name: Resolve immutable pipeline definition
         if: steps.context.outcome == 'success' && steps.pins.outcome == 'success'
@@ -238,7 +238,7 @@ jobs:
         name: Publish dispatch evidence
         if: always() && steps.preflight.outcome == 'success'
         continue-on-error: true
-        uses: $/.github/actions/publish-ci-evidence
+        uses: mindclade/.github/.github/actions/publish-ci-evidence@aabf14ba287eb3453cf9f42e19674df308564d1b
         with:
           context-json: ${{ steps.context.outputs.context_json }}
           producer: github_actions

@@ -139,12 +139,12 @@ jobs:
     steps:
       - id: context
         name: Validate caller context
-        uses: $/.github/actions/validate-trusted-context
+        uses: mindclade/.github/.github/actions/validate-trusted-context@aabf14ba287eb3453cf9f42e19674df308564d1b
         with:
           expected-source-revision: ${{ inputs.source_revision }}
       - id: pins
         name: Verify immutable implementation closure
-        uses: $/.github/actions/verify-pinned-actions
+        uses: mindclade/.github/.github/actions/verify-pinned-actions@aabf14ba287eb3453cf9f42e19674df308564d1b
       - id: preflight
         name: Validate immutable bindings before network access
         if: steps.context.outcome == 'success' && steps.pins.outcome == 'success'
@@ -255,7 +255,7 @@ jobs:
         name: Publish required-check evidence
         if: always() && steps.preflight.outcome == 'success'
         continue-on-error: true
-        uses: $/.github/actions/publish-ci-evidence
+        uses: mindclade/.github/.github/actions/publish-ci-evidence@aabf14ba287eb3453cf9f42e19674df308564d1b
         with:
           context-json: ${{ steps.context.outputs.context_json }}
           producer: github_actions
@@ -318,7 +318,7 @@ jobs:
       - id: archive-pins
         name: Verify the immutable archive verifier
         if: inputs.archive_evidence
-        uses: $/.github/actions/verify-pinned-actions
+        uses: mindclade/.github/.github/actions/verify-pinned-actions@aabf14ba287eb3453cf9f42e19674df308564d1b
       - name: Reverify every downloaded evidence byte before OIDC
         if: inputs.archive_evidence
         env:

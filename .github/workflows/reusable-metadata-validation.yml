@@ -85,13 +85,13 @@ jobs:
       - id: context
         name: Validate caller context
         continue-on-error: true
-        uses: $/.github/actions/validate-trusted-context
+        uses: mindclade/.github/.github/actions/validate-trusted-context@aabf14ba287eb3453cf9f42e19674df308564d1b
         with:
           expected-source-revision: ${{ inputs.source_revision }}
       - id: pins
         name: Verify immutable implementation closure
         continue-on-error: true
-        uses: $/.github/actions/verify-pinned-actions
+        uses: mindclade/.github/.github/actions/verify-pinned-actions@aabf14ba287eb3453cf9f42e19674df308564d1b
       - name: Check out exact caller revision
         if: steps.context.outcome == 'success' && steps.pins.outcome == 'success'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -140,7 +140,7 @@ jobs:
         name: Publish CI evidence
         if: always() && steps.context.outputs.context_json != ''
         continue-on-error: true
-        uses: $/.github/actions/publish-ci-evidence
+        uses: mindclade/.github/.github/actions/publish-ci-evidence@aabf14ba287eb3453cf9f42e19674df308564d1b
         with:
           context-json: ${{ steps.context.outputs.context_json }}
           producer: github_actions

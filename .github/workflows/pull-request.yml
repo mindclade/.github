@@ -39,7 +39,7 @@ jobs:
           printf 'source_revision=%s\n' "${SOURCE_REVISION}" >> "${GITHUB_OUTPUT}"
       - id: profile
         name: Resolve the immutable repository profile
-        uses: $/.github/actions/required-workflow-profile
+        uses: mindclade/.github/.github/actions/required-workflow-profile@937568659eac9f7fb84d040e6c3fb9341618ed14
         with:
           mode: plan
           repository: ${{ github.repository }}
@@ -62,7 +62,7 @@ jobs:
       - id: review
         name: Evaluate head-bound review evidence
         continue-on-error: true
-        uses: $/.github/actions/required-workflow-profile
+        uses: mindclade/.github/.github/actions/required-workflow-profile@937568659eac9f7fb84d040e6c3fb9341618ed14
         with:
           mode: review
           repository: ${{ github.repository }}
