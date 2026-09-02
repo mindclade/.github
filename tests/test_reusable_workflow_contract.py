@@ -170,6 +170,11 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                 "    secrets:\n      leaked: ${{ secrets.MINDCLADE_BUILDKITE_PIPELINE }}\n    uses: mindclade/.github/.github/workflows/reusable-documentation-check.yml@",
                 1,
             ),
+            source.replace(
+                "    permissions:\n      actions: read\n      contents: read\n      id-token: write\n",
+                "    permissions: {}\n",
+                1,
+            ),
             source.replace("-${{ github.workflow }}", "", 1),
             source.replace(
                 "${{ github.event.pull_request.number || github.ref }}", "${{ github.sha }}", 1

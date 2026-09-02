@@ -29,6 +29,9 @@ SELF_TEST_WORKFLOW_PATH = ".github/workflows/pull-request.yml"
 REQUIRED_CHECK_WORKFLOW_PATH = ".github/workflows/reusable-required-check.yml"
 BUILDKITE_DISPATCH_WORKFLOW_PATH = ".github/workflows/reusable-buildkite-dispatch.yml"
 BUILDKITE_BRIDGE_TEMPLATE_PATH = "workflow-templates/buildkite-bridge.yml"
+REQUIRED_CHECK_CALL = re.compile(
+    r"^mindclade/\.github/\.github/workflows/reusable-required-check\.yml@[0-9a-f]{40}$"
+)
 ARCHIVE_HANDOFF_ASSERTIONS = (
     '[[ "${ARTIFACT_ID}" =~ ^[1-9][0-9]*$ ]]',
     '[[ "${ARTIFACT_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]',
@@ -1075,10 +1078,22 @@ def validate_permissions(root: Path) -> dict[str, Any]:
                     and _has_protected_tier_guard(condition)
                     and trusted_context_producer
                 )
+                approved_delegation = (
+                    relative.as_posix() == BUILDKITE_BRIDGE_TEMPLATE_PATH
+                    and job_name == "buildkite_required"
+                    and isinstance(job.get("uses"), str)
+                    and REQUIRED_CHECK_CALL.fullmatch(job["uses"]) is not None
+                    and job["permissions"]
+                    == {"actions": "read", "contents": "read", "id-token": "write"}
+                )
                 valid_paths.add(("jobs", job_name, "permissions"))
                 errors.extend(
                     _permission_violations(
-                        relative, job_name, untrusted, protected, job["permissions"]
+                        relative,
+                        job_name,
+                        untrusted,
+                        protected or approved_delegation,
+                        job["permissions"],
                     )
                 )
         for yaml_path, key, _ in _walk_yaml(document):
@@ -1444,6 +1459,14 @@ def _buildkite_bridge_errors(document: dict[str, Any], relative: Path) -> list[s
     ):
         errors.append(
             f"{prefix} Buildkite verifier must run only after successful classified dispatch"
+        )
+    if buildkite_required.get("permissions") != {
+        "actions": "read",
+        "contents": "read",
+        "id-token": "write",
+    }:
+        errors.append(
+            f"{prefix} Buildkite verifier must authorize only evidence download and archive OIDC"
         )
     if (
         not isinstance(buildkite_required.get("uses"), str)
