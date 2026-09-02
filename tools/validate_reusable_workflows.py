@@ -55,7 +55,7 @@ DOCUMENTATION_REQUIRED_HEADINGS = {
     "profile/README.md": frozenset({"Activation boundary"}),
 }
 APPROVED_SCORECARD_WORKFLOW_SHA256 = (
-    "bb633c52d5b541d4d4461f61598f81a63265157727cf91a8c27f797e53efe3b4"
+    "4b3bc05348f5cc7ec69c74348c6ff28441d543ed64296a70c06d4850d82102e7"
 )
 COMMON_WORKFLOW_OUTPUTS = (
     "correlation_id",
@@ -100,6 +100,7 @@ ALLOWED_PERMISSIONS = {
     "checks": "write",
     "contents": "read",
     "id-token": "write",
+    "issues": "read",
     "pull-requests": "read",
     "security-events": "write",
 }
@@ -135,6 +136,10 @@ EXPECTED_INVENTORY = frozenset(
         ".github/actions/verify-pinned-actions/README.md",
         ".github/actions/publish-ci-evidence/action.yml",
         ".github/actions/publish-ci-evidence/README.md",
+        ".github/actions/required-workflow-profile/action.yml",
+        ".github/actions/required-workflow-profile/README.md",
+        ".github/actions/required-workflow-profile/profiles.generated.json",
+        ".github/actions/required-workflow-profile/required_workflow_profile.py",
         ".github/workflows/reusable-buildkite-dispatch.yml",
         ".github/workflows/reusable-required-check.yml",
         ".github/workflows/reusable-nix-validation.yml",
@@ -160,6 +165,12 @@ EXPECTED_INVENTORY = frozenset(
         "workflow-templates/repository-metadata.properties.json",
         "schemas/trusted_context.schema.json",
         "schemas/ci_evidence.schema.json",
+        "config/nix-bazel-policy.json",
+        "config/required-workflow-profiles.json",
+        "generated/bazelrc.common",
+        "generated/nix-bazel-policy.lock.json",
+        "generated/nix-bazel-policy.nix",
+        "generated/toolchain-manifest.defaults.json",
         "policy/action_pinning.rego",
         "policy/workflow_permissions.rego",
         "policy/reusable_workflow_interface.rego",
@@ -171,9 +182,12 @@ EXPECTED_INVENTORY = frozenset(
         "tests/fixtures/protected_release.json",
         "tests/test_reusable_workflow_contract.py",
         "tests/test_declared_permissions.py",
+        "tests/test_generated_ci_policy.py",
         "tests/test_action_digest_pinning.py",
+        "tests/test_required_workflow_profile.py",
         "tools/validate_reusable_workflows.py",
         "tools/emit_ci_evidence.py",
+        "tools/generate_ci_policy.py",
         "BUILD.bazel",
         ".bazelignore",
         ".bazelrc",
@@ -816,8 +830,6 @@ def _pin_reference_error(relative: Path, reference: Any) -> str | None:
             return None
         return f"{relative}: caller-checkout local action reference is forbidden: {reference}"
     if reference.startswith("$/"):
-        if relative.as_posix() == SELF_TEST_WORKFLOW_PATH:
-            return f"{relative}: repository self-test must use an exact ./.github/actions/ local action reference: {reference}"
         if IMPLEMENTATION_ACTION.fullmatch(reference) and ".." not in reference.split("/"):
             return None
         return f"{relative}: invalid implementation action reference {reference}"
@@ -1309,8 +1321,8 @@ def _bounded_concurrency_errors(document: dict[str, Any], relative: Path) -> lis
         errors.append(
             f"{relative}: repository workflow concurrency group must include its stable pull-request/ref boundary"
         )
-    if concurrency.get("cancel-in-progress") is not True:
-        errors.append(f"{relative}: concurrency must cancel superseded in-progress runs")
+    if concurrency.get("cancel-in-progress") != "${{ github.event_name == 'pull_request' }}":
+        errors.append(f"{relative}: concurrency must cancel only pull_request runs")
     return errors
 
 
@@ -1357,8 +1369,8 @@ def _buildkite_bridge_errors(document: dict[str, Any], relative: Path) -> list[s
             errors.append(
                 f"{prefix} concurrency must bind repository, workflow, and stable pull-request/ref identity"
             )
-        if concurrency.get("cancel-in-progress") is not True:
-            errors.append(f"{prefix} must cancel superseded runs")
+        if concurrency.get("cancel-in-progress") != "${{ github.event_name == 'pull_request' }}":
+            errors.append(f"{prefix} must cancel only pull_request runs")
 
     jobs = document.get("jobs")
     if not isinstance(jobs, dict):

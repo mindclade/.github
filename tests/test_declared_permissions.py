@@ -36,14 +36,12 @@ class DeclaredPermissionsTest(unittest.TestCase):
                 validator.validate_permissions(root)["errors"][0],
             )
             workflow.write_text(
-                "on: [pull_request]\npermissions:\n  contents: write\n  issues: read\n  id-token: write\n",
+                "on: [pull_request]\npermissions:\n  contents: write\n  issues: write\n  id-token: write\n",
                 encoding="utf-8",
             )
             violations = validator.validate_permissions(root)["errors"]
             self.assertTrue(any("contents must be read" in violation for violation in violations))
-            self.assertTrue(
-                any("unapproved permission scope issues" in violation for violation in violations)
-            )
+            self.assertTrue(any("issues must be read" in violation for violation in violations))
             self.assertTrue(
                 any("write permission id-token requires" in violation for violation in violations)
             )

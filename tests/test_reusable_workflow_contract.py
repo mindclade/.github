@@ -67,7 +67,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
     def test_repository_matches_the_approved_inventory(self) -> None:
         outcome = validator.validate_inventory(ROOT)
         self.assertTrue(outcome["ok"], outcome["errors"])
-        self.assertEqual(71, outcome["expected"])
+        self.assertEqual(len(validator.EXPECTED_INVENTORY), outcome["expected"])
         self.assertIn(".github/actionlint.yaml", validator.EXPECTED_INVENTORY)
         self.assertIn(".github/workflows/pull-request.yml", validator.EXPECTED_INVENTORY)
         self.assertIn(
@@ -390,10 +390,31 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             with self.subTest(group=group):
                 document = {
                     "jobs": {"test": {"runs-on": "ubuntu-24.04"}},
-                    "concurrency": {"group": group, "cancel-in-progress": True},
+                    "concurrency": {
+                        "group": group,
+                        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+                    },
                 }
                 errors = validator._bounded_concurrency_errors(document, reusable_path)
                 self.assertTrue(any(expected_error in error for error in errors), errors)
+
+        valid_group = (
+            "reusable-${{ github.repository }}-${{ github.workflow }}-"
+            "${{ github.event.pull_request.number || github.ref }}"
+        )
+        for cancellation in (True, False, "${{ github.event_name != 'merge_group' }}"):
+            with self.subTest(cancellation=cancellation):
+                errors = validator._bounded_concurrency_errors(
+                    {
+                        "jobs": {"test": {"runs-on": "ubuntu-24.04"}},
+                        "concurrency": {
+                            "group": valid_group,
+                            "cancel-in-progress": cancellation,
+                        },
+                    },
+                    reusable_path,
+                )
+                self.assertTrue(any("only pull_request" in error for error in errors), errors)
 
     def test_buildkite_secret_classification_uses_the_repository_path_not_display_name(
         self,

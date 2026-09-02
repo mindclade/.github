@@ -7,6 +7,7 @@ allowed_permissions := {
 	"checks": "write",
 	"contents": "read",
 	"id-token": "write",
+	"issues": "read",
 	"pull-requests": "read",
 	"security-events": "write",
 }

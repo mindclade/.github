@@ -58,7 +58,7 @@ on:
 
 concurrency:
   group: mindclade-org-metadata-${{ github.repository }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions: {}
 

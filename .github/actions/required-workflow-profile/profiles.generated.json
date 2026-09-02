@@ -1,0 +1,55 @@
+{
+  "api_version": "ci.mindclade.dev/v1",
+  "generated": {
+    "authority_repository": "mindclade/.github",
+    "authority_revision": null,
+    "profile_digest": "sha256:9862e830ba3cc84a52ae053d00e50833a448e006a67d640716984778eaf2e777"
+  },
+  "kind": "RequiredWorkflowProfiles",
+  "metadata": {
+    "name": "mindclade-estate",
+    "revision": 1
+  },
+  "spec": {
+    "founder_pr_bypass": {
+      "accounts": [
+        "mindclade-founder",
+        "robpearc"
+      ],
+      "identity_authority": {
+        "path": "config/organization.yaml#spec.founder_bootstrap_exception.github_actor_accounts",
+        "repository": "mindclade/github-config",
+        "revision": "f3b10750aa98498264ac44d59c7238331b2040d6",
+        "source_sha256": "ad35f7654d8ff3b265c072778f7b6f5110b4f3510ccae5d0b8d817bbf83fc965"
+      },
+      "label": "founder-bypass",
+      "marker": "<!-- founder-pr-bypass:v1 -->",
+      "minimum_normal_approvals": 2,
+      "principal_id": "founder-primary"
+    },
+    "repositories": {
+      "mindclade/.github": {
+        "profile": "nix-standard"
+      },
+      "mindclade/bootstrap": {
+        "profile": "nix-standard"
+      },
+      "mindclade/github-config": {
+        "profile": "nix-standard"
+      },
+      "mindclade/gitops": {
+        "profile": "nix-standard"
+      },
+      "mindclade/infrastructure-live": {
+        "profile": "nix-standard"
+      },
+      "mindclade/mindclade": {
+        "documentation_roots": [
+          "README.md",
+          "docs"
+        ],
+        "profile": "buildkite-isolated"
+      }
+    }
+  }
+}

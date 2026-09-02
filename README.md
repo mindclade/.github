@@ -17,13 +17,39 @@ This repository contains the pre-production source for Mindclade organization re
 
 The repository remains pre-production until connected activation is explicitly approved and evidenced. Dependabot checks GitHub Actions and Bazel dependencies weekly. This source defines no dependency auto-merge automation; connected governance must separately enforce the required human reviews.
 
-The repository-local `flake.nix` and `flake.lock` are the sole system-toolchain authority for supported `aarch64-darwin` and `x86_64-linux` hosts. They expose the reviewed `packages.toolchain`, identical default/CI tool closures, formatter, and toolchain/source checks while leaving Bazel and its module graph authoritative for build inputs. From a clean checkout, run:
+The repository-local `flake.nix` and `flake.lock` are the system-toolchain lock authority for supported `aarch64-darwin`, `aarch64-linux`, and `x86_64-linux` hosts. The canonical estate defaults live in `config/nix-bazel-policy.json`; `tools/generate_ci_policy.py` renders the imported Nix policy, common Bazel rc, toolchain-manifest defaults, and a digest-bound lock. They expose the reviewed `packages.toolchain`, identical default/CI tool closures, formatter, and toolchain/source checks while leaving Bazel and its module graph authoritative for build inputs. From a clean checkout, run:
 
 ```bash
 nix build --no-accept-flake-config --no-update-lock-file .#toolchain
 nix flake check --no-accept-flake-config --no-update-lock-file
 nix develop --no-accept-flake-config --no-update-lock-file .#ci --command just ci
 ```
+
+Regenerate the policy closure only from its source documents and bind consumer materialization to
+an immutable reviewed authority commit:
+
+```bash
+python3 tools/generate_ci_policy.py generate \
+  --root . \
+  --authority-revision <40-character-reviewed-commit>
+python3 tools/generate_ci_policy.py check --root .
+```
+
+## Estate required workflow
+
+`.github/workflows/pull-request.yml` is the organization-required workflow source. Its workflow
+name and final job deliberately remain `Pull request / required`. The generated profile catalog
+maps each repository to a fixed Nix or isolated-Buildkite path; callers cannot supply commands,
+runners, permissions, or workflow references. Every planned shard must report success and every
+non-required shard must report `skipped`, so cancelled, missing, or ambiguously selected work fails
+closed. Only superseded `pull_request` runs are cancelled; merge groups and other qualification
+events are never cancelled.
+
+Pull-request review policy accepts the ordinary two-account quorum or the evidence protocol
+documented in `.github/actions/required-workflow-profile/README.md`. The founder protocol is a
+durable PR-review exception, not a CI, merge-queue, history, environment, or deployment bypass.
+Review submission/dismissal and label changes refresh the required workflow. After adding or
+editing a founder marker comment, toggle the exact label so GitHub creates a new head-bound run.
 
 Remote Bazel execution and remote caching are intentionally disabled. They may be enabled only for workers with the exact reviewed Nix store paths or an immutable, digest-pinned image built from this toolchain closure.
 
