@@ -46,7 +46,12 @@ class StubClient:
 
 
 def review(review_id: int, login: str, state: str) -> dict[str, Any]:
-    return {"id": review_id, "state": state, "user": {"login": login}}
+    return {
+        "commit_id": HEAD,
+        "id": review_id,
+        "state": state,
+        "user": {"login": login},
+    }
 
 
 def bypass_comment(comment_id: int, login: str, head: str = HEAD) -> dict[str, Any]:
@@ -89,6 +94,12 @@ class RequiredWorkflowProfileTest(unittest.TestCase):
         self.assertEqual(["reviewer-a", "reviewer-b"], evidence["normal_review"]["approved_logins"])
 
         client.reviews.append(review(4, "reviewer-b", "CHANGES_REQUESTED"))
+        denied = profile.evaluate_review(PROFILES, "mindclade/bootstrap", 7, HEAD, client)
+        self.assertEqual("denied", denied["decision"])
+
+        stale = review(5, "reviewer-b", "APPROVED")
+        stale["commit_id"] = "b" * 40
+        client.reviews[-1] = stale
         denied = profile.evaluate_review(PROFILES, "mindclade/bootstrap", 7, HEAD, client)
         self.assertEqual("denied", denied["decision"])
 

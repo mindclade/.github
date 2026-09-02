@@ -169,22 +169,28 @@ def _login(value: Any) -> str | None:
     return login if isinstance(login, str) and login else None
 
 
-def _normal_approvals(reviews: list[dict[str, Any]], author: str) -> list[str]:
-    latest: dict[str, tuple[int, str, str]] = {}
+def _normal_approvals(reviews: list[dict[str, Any]], author: str, expected_head: str) -> list[str]:
+    latest: dict[str, tuple[int, str, str, str | None]] = {}
     for review in reviews:
         login = _login(review.get("user"))
         state = review.get("state")
         review_id = review.get("id")
+        commit_id = review.get("commit_id")
         if login is None or not isinstance(state, str) or not isinstance(review_id, int):
             continue
         folded = login.casefold()
         previous = latest.get(folded)
         if previous is None or review_id > previous[0]:
-            latest[folded] = (review_id, login, state.upper())
+            latest[folded] = (
+                review_id,
+                login,
+                state.upper(),
+                commit_id if isinstance(commit_id, str) else None,
+            )
     return sorted(
         value[1]
         for folded, value in latest.items()
-        if folded != author.casefold() and value[2] == "APPROVED"
+        if (folded != author.casefold() and value[2] == "APPROVED" and value[3] == expected_head)
     )
 
 
@@ -242,7 +248,7 @@ def evaluate_review(
         f"/repos/{repository}/issues/{pull_request_number}/comments?per_page=100"
     )
     bypass_policy = profiles["spec"]["founder_pr_bypass"]
-    approvals = _normal_approvals(reviews, author)
+    approvals = _normal_approvals(reviews, author, expected_head)
     minimum = bypass_policy["minimum_normal_approvals"]
     quorum = len(approvals) >= minimum
     bypass = _bypass_comment(comments, bypass_policy["accounts"], expected_head)
