@@ -34,4 +34,4 @@ dynamic checks disabled; newly added Python modules inherit strict checking.
 
 A source-ready change has complete source, metadata, validation, and review evidence. It does not make external organization settings, credentials, or workflow integrations live. Connected activation requires separately approved and independently verified external governance and security controls.
 
-Dependabot updates for GitHub Actions and Bazel run weekly. This repository defines no automation that merges them; connected governance must require the same human review and validation as other changes.
+Renovate updates for GitHub Actions, Bazel and Nix run daily from the organization-wide job in `github-config`. This repository defines no automation that merges them; connected governance must require the same human review and validation as other changes.

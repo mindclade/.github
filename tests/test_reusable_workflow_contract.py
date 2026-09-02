@@ -1125,7 +1125,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             self.assertEqual("allow", outcome["verdict"])
             self.assertEqual("refs/heads/feature/x", outcome["context"]["ref"])
 
-    def test_dependabot_actor_is_accepted_without_changing_pr_execution_tier(self) -> None:
+    def test_bot_actor_is_accepted_without_changing_pr_execution_tier(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             event = Path(temporary) / "event.json"
             event.write_text(
@@ -1134,7 +1134,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                         "pull_request": {
                             "head": {
                                 "sha": SHA,
-                                "ref": "dependabot/bazel/rules_python-2.3.2",
+                                "ref": "renovate/bazel-module-minor-and-patch",
                                 "repo": {"fork": False},
                             },
                             "base": {"sha": "b" * 40},
@@ -1150,7 +1150,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                         "GITHUB_EVENT_NAME": "pull_request",
                         "GITHUB_SHA": SHA,
                         "GITHUB_REPOSITORY": "mindclade/.github",
-                        "GITHUB_ACTOR": "dependabot[bot]",
+                        "GITHUB_ACTOR": "mindclade-renovate[bot]",
                         "GITHUB_REF": "refs/pull/43/merge",
                         "GITHUB_WORKFLOW_REF": "mindclade/.github/.github/workflows/pull-request.yml@"
                         + SHA,

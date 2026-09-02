@@ -1,0 +1,110 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Mindclade estate-wide Renovate policy. Every repository extends this preset.",
+    "Dependency pull requests always take normal review and the same required checks",
+    "as any other change; this preset never enables automerge."
+  ],
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "timezone": "Etc/UTC",
+  "dependencyDashboard": true,
+  "dependencyDashboardTitle": "Renovate dependency dashboard",
+  "automerge": false,
+  "platformAutomerge": false,
+  "rebaseWhen": "conflicted",
+  "prConcurrentLimit": 8,
+  "branchConcurrentLimit": 8,
+  "labels": ["dependencies"],
+  "semanticCommits": "enabled",
+  "commitMessagePrefix": "deps:",
+  "separateMajorMinor": true,
+  "separateMultipleMajor": true,
+  "osvVulnerabilityAlerts": true,
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 06:00 on the first day of the month"]
+  },
+  "ignorePaths": [
+    "**/node_modules/**",
+    "**/bower_components/**",
+    "**/vendor/**",
+    "build/**",
+    "**/build/bazel-user-root/**",
+    "**/.venv/**",
+    "old/**"
+  ],
+  "packageRules": [
+    {
+      "description": "First-party reusable workflows and composite actions are re-pinned by the estate release process, never by Renovate. The governance policy github-config/policy/workflow_sources.rego requires a bare 40-hex ref with no version comment; a Renovate update would append one and fail policy.",
+      "matchManagers": ["github-actions"],
+      "matchPackageNames": ["mindclade/**"],
+      "enabled": false
+    },
+    {
+      "description": "Group compatible minor and patch updates per manager so one review covers them.",
+      "matchUpdateTypes": ["minor", "patch", "digest"],
+      "groupName": "{{manager}} minor and patch",
+      "groupSlug": "{{manager}}-compatible"
+    },
+    {
+      "description": "Majors stay separate and individually reviewable.",
+      "matchUpdateTypes": ["major"],
+      "groupName": null,
+      "addLabels": ["major-update"]
+    },
+    {
+      "description": "Resolve OpenTofu providers from the OpenTofu registry rather than the Terraform registry.",
+      "matchDatasources": ["terraform-provider", "terraform-module"],
+      "registryUrls": ["https://registry.opentofu.org"]
+    },
+    {
+      "description": "Keep every GitHub Actions reference pinned to a commit SHA with a version comment; the organization Actions policy sets sha_pinning_required.",
+      "matchManagers": ["github-actions"],
+      "pinDigests": true
+    },
+    {
+      "description": "Keep container references pinned by digest.",
+      "matchManagers": ["dockerfile", "docker-compose", "kustomize", "helm-values"],
+      "pinDigests": true
+    },
+    {
+      "description": "Nix flake input support is still beta upstream; keep it enabled but grouped and clearly labelled.",
+      "matchManagers": ["nix"],
+      "groupName": "nix flake inputs",
+      "addLabels": ["nix"]
+    },
+    {
+      "description": "Commit-message prefixes preserve the per-ecosystem convention the estate already used.",
+      "matchManagers": ["github-actions"],
+      "commitMessagePrefix": "deps(actions):"
+    },
+    {
+      "matchManagers": ["gomod"],
+      "commitMessagePrefix": "deps(go):",
+      "postUpdateOptions": ["gomodTidy"]
+    },
+    {
+      "matchManagers": ["cargo"],
+      "commitMessagePrefix": "deps(rust):"
+    },
+    {
+      "matchManagers": ["npm"],
+      "commitMessagePrefix": "deps(node):"
+    },
+    {
+      "matchManagers": ["pep621", "pip_requirements"],
+      "commitMessagePrefix": "deps(python):"
+    },
+    {
+      "matchManagers": ["terraform"],
+      "commitMessagePrefix": "deps(opentofu):"
+    },
+    {
+      "matchManagers": ["bazel-module"],
+      "commitMessagePrefix": "deps(bazel):"
+    }
+  ]
+}

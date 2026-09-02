@@ -5,6 +5,8 @@
     "includes": [
       ".vscode/*.json",
       "biome.json",
+      "default.json",
+      ".github/renovate.json",
       "schemas/**/*.json",
       "workflow-templates/*.properties.json",
       "!tests/fixtures"

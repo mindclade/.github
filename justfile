@@ -27,8 +27,14 @@ lint:
     ruff check .
     pyright
     actionlint .github/workflows/*.yml
+    zizmor --no-progress --offline .github/workflows/*.yml .github/actions
     yamllint --config-file .yamllint.yaml .
     markdownlint-cli2
+
+# Vulnerability scan of declared dependencies. Requires network access to the
+# OSV database, so it is deliberately separate from the hermetic lint recipe.
+security:
+    osv-scanner scan source --recursive .
 
 test:
     {{ bazel }} test --config=ci --symlink_prefix=/ //:self_test
@@ -45,7 +51,7 @@ workflows:
 flake-check:
     nix flake check --no-accept-flake-config --no-build --no-update-lock-file
 
-check: generated-check format-check lint policy workflows test flake-check
+check: generated-check format-check lint policy workflows test security flake-check
 
 ci: check
 

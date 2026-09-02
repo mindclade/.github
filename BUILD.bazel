@@ -163,7 +163,6 @@ genrule(
             ".github/actions/**/*.yaml",
             ".github/actions/**/*.yml",
             ".github/actionlint.yaml",
-            ".github/dependabot.yml",
             ".github/workflows/*.yaml",
             ".github/workflows/*.yml",
             "workflow-templates/*.yaml",

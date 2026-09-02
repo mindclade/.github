@@ -159,6 +159,7 @@
             nixfmt
             nodejs_24
             opa
+            osv-scanner
             pre-commit
 
             pyright
@@ -173,6 +174,7 @@
             unzip
             yamllint
             yq-go
+            zizmor
           ];
           toolchain = pkgs.buildEnv {
             name = "mindclade-dot-github-toolchain";
@@ -235,6 +237,8 @@
                 test "$(ruff --version)" = "ruff 0.16.4"
                 test "$(shfmt --version)" = "3.13.1"
                 test "$(actionlint -version | head -n1)" = "1.7.12"
+                test "$(zizmor --version)" = "zizmor 1.29.0"
+                test "$(osv-scanner --version | awk '/^osv-scanner version:/ {print $3}')" = "2.5.0"
                 test "$(just --version)" = "just 1.58.0"
                 test "$(opa version | awk '/^Version:/ {print $2}')" = "1.20.1"
                 test "$(python3 -c 'import platform; print(platform.python_version())')" = "3.13.15"

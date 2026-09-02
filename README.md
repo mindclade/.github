@@ -15,7 +15,7 @@ This repository contains the pre-production source for Mindclade organization re
 - **source-ready:** source, metadata, validation, and review evidence are complete. No live organization change, credential use, or production claim follows from this state.
 - **connected:** a separately approved external organization connection has been independently verified under the applicable governance and security controls.
 
-The repository remains pre-production until connected activation is explicitly approved and evidenced. Dependabot checks GitHub Actions and Bazel dependencies weekly. This source defines no dependency auto-merge automation; connected governance must separately enforce the required human reviews.
+The repository remains pre-production until connected activation is explicitly approved and evidenced. Renovate checks GitHub Actions, Bazel and Nix dependencies daily from a single organization-wide job in `github-config`; `default.json` in this repository is the shared policy every repository extends. This source defines no dependency auto-merge automation; connected governance must separately enforce the required human reviews.
 
 The repository-local `flake.nix` and `flake.lock` are the system-toolchain lock authority for supported `aarch64-darwin`, `aarch64-linux`, and `x86_64-linux` hosts. The canonical estate defaults live in `config/nix-bazel-policy.json`; `tools/generate_ci_policy.py` renders the imported Nix policy, common Bazel rc, toolchain-manifest defaults, and a digest-bound lock. They expose the reviewed `packages.toolchain`, identical default/CI tool closures, formatter, and toolchain/source checks while leaving Bazel and its module graph authoritative for build inputs. From a clean checkout, run:
 
