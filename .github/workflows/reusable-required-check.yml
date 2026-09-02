@@ -37,6 +37,15 @@ on:
         required: false
         default: false
         type: boolean
+      shadow_check_run:
+        description: |-
+          Publish a non-required Check Run mirroring the polled Buildkite
+          conclusion. Shadow mode for the eventual Buildkite-completed callback:
+          it proves the Check Run path works end to end while the poll remains
+          the only authority. It never gates a merge.
+        required: false
+        default: false
+        type: boolean
       gcp_workload_identity_provider:
         description: Exact projects/<number>/locations/global/workloadIdentityPools/github-ci-evidence/providers/writer resource name.
         required: false
@@ -275,6 +284,43 @@ jobs:
           set -euo pipefail
           [[ "${CONCLUSION}" == success ]]
           [[ "${EVIDENCE_OUTCOME}" == success ]]
+
+  shadow_check_run:
+    name: Shadow Buildkite check run
+    needs: required
+    if: inputs.shadow_check_run && needs.required.result == 'success' && (needs.required.outputs.execution_tier == 'trusted' || needs.required.outputs.execution_tier == 'release')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      checks: write
+      contents: read
+    steps:
+      - name: Publish the shadow check run
+        env:
+          BUILD_ID: ${{ inputs.build_id }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
+          CONCLUSION: ${{ needs.required.outputs.conclusion }}
+          CORRELATION_ID: ${{ needs.required.outputs.correlation_id }}
+          GH_TOKEN: ${{ github.token }}
+          REASON_CODE: ${{ needs.required.outputs.reason_code }}
+          SOURCE_REVISION: ${{ inputs.source_revision }}
+        run: |
+          set -euo pipefail
+          # Deliberately named so it can never be mistaken for, or configured as,
+          # the required context. Activation moves creation to dispatch time as
+          # in_progress and lets Buildkite complete it; this run only proves the
+          # create-and-complete path works while the poll stays authoritative.
+          [[ "${SOURCE_REVISION}" =~ ^[0-9a-f]{40}$ ]]
+          [[ "${BUILD_NUMBER}" =~ ^[1-9][0-9]*$ ]]
+          [[ "${CONCLUSION}" == success ]]
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/check-runs" \
+            --field name='Mindclade / Buildkite (shadow)' \
+            --field head_sha="${SOURCE_REVISION}" \
+            --field status=completed \
+            --field conclusion=success \
+            --field "output[title]=Buildkite build ${BUILD_NUMBER}" \
+            --field "output[summary]=Shadow of the polled result. Not a required check. correlation ${CORRELATION_ID}, reason ${REASON_CODE}, build ${BUILD_ID}." \
+            >/dev/null
 
   archive:
     name: Archive protected CI evidence

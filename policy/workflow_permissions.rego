@@ -18,6 +18,7 @@ protected_tier_guards := {
 	"needs.prepare.result == 'success' && (needs.prepare.outputs.execution_tier == 'trusted' || needs.prepare.outputs.execution_tier == 'release')",
 	"needs.prepare.result == 'success' && (needs.prepare.outputs.execution_tier == 'release' || needs.prepare.outputs.execution_tier == 'trusted')",
 	"inputs.archive_evidence && needs.required.result == 'success' && (needs.required.outputs.execution_tier == 'trusted' || needs.required.outputs.execution_tier == 'release')",
+	"inputs.shadow_check_run && needs.required.result == 'success' && (needs.required.outputs.execution_tier == 'trusted' || needs.required.outputs.execution_tier == 'release')",
 }
 
 workflow_data := input.workflow if {
