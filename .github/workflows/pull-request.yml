@@ -39,7 +39,7 @@ jobs:
           printf 'source_revision=%s\n' "${SOURCE_REVISION}" >> "${GITHUB_OUTPUT}"
       - id: profile
         name: Resolve the immutable repository profile
-        uses: mindclade/.github/.github/actions/required-workflow-profile@937568659eac9f7fb84d040e6c3fb9341618ed14
+        uses: mindclade/.github/.github/actions/required-workflow-profile@e90483097890030ede19981503f443a602a8e6e5
         with:
           mode: plan
           repository: ${{ github.repository }}
@@ -62,7 +62,7 @@ jobs:
       - id: review
         name: Evaluate head-bound review evidence
         continue-on-error: true
-        uses: mindclade/.github/.github/actions/required-workflow-profile@937568659eac9f7fb84d040e6c3fb9341618ed14
+        uses: mindclade/.github/.github/actions/required-workflow-profile@e90483097890030ede19981503f443a602a8e6e5
         with:
           mode: review
           repository: ${{ github.repository }}
@@ -99,7 +99,7 @@ jobs:
     if: needs.profile.result == 'success' && needs.profile.outputs.profile == 'nix-standard'
     permissions:
       contents: read
-    uses: mindclade/.github/.github/workflows/reusable-nix-validation.yml@b4d28faa5fde98087f60262110a43f25f6da9eb8
+    uses: mindclade/.github/.github/workflows/reusable-nix-validation.yml@e90483097890030ede19981503f443a602a8e6e5
     with:
       source_revision: ${{ needs.profile.outputs.source_revision }}
 
@@ -109,7 +109,7 @@ jobs:
     if: needs.profile.result == 'success' && needs.profile.outputs.profile == 'buildkite-isolated'
     permissions:
       contents: read
-    uses: mindclade/.github/.github/workflows/reusable-metadata-validation.yml@b4d28faa5fde98087f60262110a43f25f6da9eb8
+    uses: mindclade/.github/.github/workflows/reusable-metadata-validation.yml@e90483097890030ede19981503f443a602a8e6e5
     with:
       source_revision: ${{ needs.profile.outputs.source_revision }}
 
@@ -123,7 +123,7 @@ jobs:
       needs.classify.outputs.trust_classification == 'untrusted'
     permissions:
       contents: read
-    uses: mindclade/.github/.github/workflows/reusable-documentation-check.yml@b4d28faa5fde98087f60262110a43f25f6da9eb8
+    uses: mindclade/.github/.github/workflows/reusable-documentation-check.yml@e90483097890030ede19981503f443a602a8e6e5
     with:
       source_revision: ${{ needs.profile.outputs.source_revision }}
       documentation_roots: |-
@@ -139,7 +139,7 @@ jobs:
       needs.classify.outputs.trust_classification != 'untrusted'
     permissions:
       contents: read
-    uses: mindclade/.github/.github/workflows/reusable-buildkite-dispatch.yml@b4d28faa5fde98087f60262110a43f25f6da9eb8
+    uses: mindclade/.github/.github/workflows/reusable-buildkite-dispatch.yml@e90483097890030ede19981503f443a602a8e6e5
     with:
       source_revision: ${{ needs.profile.outputs.source_revision }}
       pipeline_class: presubmit
@@ -155,7 +155,7 @@ jobs:
       actions: read
       contents: read
       id-token: write
-    uses: mindclade/.github/.github/workflows/reusable-required-check.yml@b4d28faa5fde98087f60262110a43f25f6da9eb8
+    uses: mindclade/.github/.github/workflows/reusable-required-check.yml@e90483097890030ede19981503f443a602a8e6e5
     with:
       source_revision: ${{ needs.profile.outputs.source_revision }}
       pipeline_definition_revision: ${{ needs.dispatch.outputs.pipeline_definition_revision }}

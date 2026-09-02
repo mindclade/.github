@@ -24,7 +24,7 @@ SELF_TEST_LOCAL_ACTION = re.compile(
 )
 TRUSTED_CONTEXT_ACTION = "mindclade/.github/.github/actions/validate-trusted-context@aabf14ba287eb3453cf9f42e19674df308564d1b"
 PIN_VERIFICATION_ACTION = "mindclade/.github/.github/actions/verify-pinned-actions@aabf14ba287eb3453cf9f42e19674df308564d1b"
-REQUIRED_PROFILE_ACTION = "mindclade/.github/.github/actions/required-workflow-profile@937568659eac9f7fb84d040e6c3fb9341618ed14"
+REQUIRED_PROFILE_ACTION = "mindclade/.github/.github/actions/required-workflow-profile@e90483097890030ede19981503f443a602a8e6e5"
 SELF_TEST_WORKFLOW_PATH = ".github/workflows/pull-request.yml"
 REQUIRED_CHECK_WORKFLOW_PATH = ".github/workflows/reusable-required-check.yml"
 BUILDKITE_DISPATCH_WORKFLOW_PATH = ".github/workflows/reusable-buildkite-dispatch.yml"

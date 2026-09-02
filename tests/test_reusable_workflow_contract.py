@@ -104,7 +104,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                 "buildkite_required",
             )
         }
-        self.assertEqual({"b4d28faa5fde98087f60262110a43f25f6da9eb8"}, revisions)
+        self.assertEqual({"e90483097890030ede19981503f443a602a8e6e5"}, revisions)
 
     def test_required_profile_action_exports_expression_safe_outputs(self) -> None:
         action = ROOT / ".github/actions/required-workflow-profile/action.yml"
@@ -141,7 +141,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                 1,
             ),
             source.replace(
-                "reusable-nix-validation.yml@b4d28faa5fde98087f60262110a43f25f6da9eb8",
+                "reusable-nix-validation.yml@e90483097890030ede19981503f443a602a8e6e5",
                 "reusable-nix-validation.yml@" + "a" * 40,
                 1,
             ),
