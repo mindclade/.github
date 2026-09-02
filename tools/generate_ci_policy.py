@@ -156,6 +156,10 @@ def render(root: Path, authority_revision: str | None) -> dict[Path, bytes]:
     manifest = {
         "api_version": "ci.mindclade.dev/v1",
         "kind": "ToolchainManifestDefaults",
+        "generator": {
+            "command": "python3 tools/generate_ci_policy.py generate",
+            "source": POLICY_SOURCE.as_posix(),
+        },
         "authority": {
             "policy_digest": policy_digest,
             "repository": "mindclade/.github",
