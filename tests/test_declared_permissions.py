@@ -13,6 +13,8 @@ import emit_ci_evidence as evidence
 import validate_reusable_workflows as validator
 
 ROOT = Path(__file__).resolve().parents[1]
+CONTEXT_USES = f"        uses: {validator.TRUSTED_CONTEXT_ACTION}\n"
+PINS_USES = f"        uses: {validator.PIN_VERIFICATION_ACTION}\n"
 
 
 class DeclaredPermissionsTest(unittest.TestCase):
@@ -36,14 +38,12 @@ class DeclaredPermissionsTest(unittest.TestCase):
                 validator.validate_permissions(root)["errors"][0],
             )
             workflow.write_text(
-                "on: [pull_request]\npermissions:\n  contents: write\n  issues: read\n  id-token: write\n",
+                "on: [pull_request]\npermissions:\n  contents: write\n  issues: write\n  id-token: write\n",
                 encoding="utf-8",
             )
             violations = validator.validate_permissions(root)["errors"]
             self.assertTrue(any("contents must be read" in violation for violation in violations))
-            self.assertTrue(
-                any("unapproved permission scope issues" in violation for violation in violations)
-            )
+            self.assertTrue(any("issues must be read" in violation for violation in violations))
             self.assertTrue(
                 any("write permission id-token requires" in violation for violation in violations)
             )
@@ -81,11 +81,9 @@ class DeclaredPermissionsTest(unittest.TestCase):
                 "    outputs:\n"
                 "      execution_tier: ${{ steps.context.outputs.execution_tier }}\n"
                 "    steps:\n"
-                "      - id: context\n"
-                "        uses: $/.github/actions/validate-trusted-context\n"
-                "        with:\n"
+                "      - id: context\n" + CONTEXT_USES + "        with:\n"
                 "          expected-source-revision: ${{ inputs.source_revision }}\n"
-                "      - uses: $/.github/actions/verify-pinned-actions\n"
+                f"      - uses: {validator.PIN_VERIFICATION_ACTION}\n"
             )
             protected_archive = (
                 "  archive:\n"
@@ -135,12 +133,9 @@ class DeclaredPermissionsTest(unittest.TestCase):
                 "    outputs:\n"
                 "      execution_tier: ${{ steps.context.outputs.execution_tier }}\n"
                 "    steps:\n"
-                "      - id: context\n"
-                "        uses: $/.github/actions/validate-trusted-context\n"
-                "        with:\n"
+                "      - id: context\n" + CONTEXT_USES + "        with:\n"
                 "          expected-source-revision: ${{ inputs.source_revision }}\n"
-                "      - name: Verify immutable implementation closure\n"
-                "        uses: $/.github/actions/verify-pinned-actions\n"
+                "      - name: Verify immutable implementation closure\n" + PINS_USES
             )
             protected_scan = (
                 "  scan:\n"
@@ -189,8 +184,8 @@ class DeclaredPermissionsTest(unittest.TestCase):
             )
 
             bypassable_context = trusted_prepare.replace(
-                "        uses: $/.github/actions/validate-trusted-context\n",
-                "        continue-on-error: true\n        uses: $/.github/actions/validate-trusted-context\n",
+                CONTEXT_USES,
+                "        continue-on-error: true\n" + CONTEXT_USES,
             )
             workflow.write_text(
                 "on: [workflow_call]\npermissions: {}\njobs:\n"
@@ -240,24 +235,20 @@ class DeclaredPermissionsTest(unittest.TestCase):
 
             for bypassable_pins in (
                 trusted_prepare.replace(
-                    "      - name: Verify immutable implementation closure\n"
-                    "        uses: $/.github/actions/verify-pinned-actions\n",
+                    "      - name: Verify immutable implementation closure\n" + PINS_USES,
                     "",
                 ),
                 trusted_prepare.replace(
-                    "        uses: $/.github/actions/verify-pinned-actions\n",
-                    "        continue-on-error: true\n"
-                    "        uses: $/.github/actions/verify-pinned-actions\n",
+                    PINS_USES,
+                    "        continue-on-error: true\n" + PINS_USES,
                 ),
                 trusted_prepare.replace(
-                    "        uses: $/.github/actions/verify-pinned-actions\n",
-                    "        if: false\n        uses: $/.github/actions/verify-pinned-actions\n",
+                    PINS_USES,
+                    "        if: false\n" + PINS_USES,
                 ),
                 trusted_prepare.replace(
-                    "        uses: $/.github/actions/verify-pinned-actions\n",
-                    "        uses: $/.github/actions/verify-pinned-actions\n"
-                    "        with:\n"
-                    "          root: caller\n",
+                    PINS_USES,
+                    PINS_USES + "        with:\n          root: caller\n",
                 ),
             ):
                 with self.subTest(bypassable_pins=bypassable_pins):
@@ -281,16 +272,12 @@ class DeclaredPermissionsTest(unittest.TestCase):
                     "  prepare:\n    env:\n      BASH_ENV: /tmp/fabricate-context\n",
                 ),
                 trusted_prepare.replace(
-                    "        uses: $/.github/actions/validate-trusted-context\n",
-                    "        uses: $/.github/actions/validate-trusted-context\n"
-                    "        env:\n"
-                    "          BASH_ENV: /tmp/fabricate-context\n",
+                    CONTEXT_USES,
+                    CONTEXT_USES + "        env:\n          BASH_ENV: /tmp/fabricate-context\n",
                 ),
                 trusted_prepare.replace(
-                    "        uses: $/.github/actions/verify-pinned-actions\n",
-                    "        uses: $/.github/actions/verify-pinned-actions\n"
-                    "        env:\n"
-                    "          BASH_ENV: /tmp/bypass-pins\n",
+                    PINS_USES,
+                    PINS_USES + "        env:\n          BASH_ENV: /tmp/bypass-pins\n",
                 ),
                 trusted_prepare.replace(
                     "    steps:\n",
@@ -299,17 +286,14 @@ class DeclaredPermissionsTest(unittest.TestCase):
                     "        run: echo /tmp/fake-bin >> $GITHUB_PATH\n",
                 ),
                 trusted_prepare.replace(
-                    "      - id: context\n"
-                    "        uses: $/.github/actions/validate-trusted-context\n"
-                    "        with:\n"
+                    "      - id: context\n" + CONTEXT_USES + "        with:\n"
                     "          expected-source-revision: ${{ inputs.source_revision }}\n"
+                    "      - name: Verify immutable implementation closure\n" + PINS_USES,
                     "      - name: Verify immutable implementation closure\n"
-                    "        uses: $/.github/actions/verify-pinned-actions\n",
-                    "      - name: Verify immutable implementation closure\n"
-                    "        uses: $/.github/actions/verify-pinned-actions\n"
-                    "      - id: context\n"
-                    "        uses: $/.github/actions/validate-trusted-context\n"
-                    "        with:\n"
+                    + PINS_USES
+                    + "      - id: context\n"
+                    + CONTEXT_USES
+                    + "        with:\n"
                     "          expected-source-revision: ${{ inputs.source_revision }}\n",
                 ),
                 trusted_prepare.replace(

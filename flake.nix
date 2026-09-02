@@ -12,10 +12,11 @@
   outputs =
     { self, nixpkgs }:
     let
-      systems = [
-        "aarch64-darwin"
-        "x86_64-linux"
-      ];
+      policy = import ./generated/nix-bazel-policy.nix;
+      manifestDefaults = builtins.fromJSON (
+        builtins.readFile ./generated/toolchain-manifest.defaults.json
+      );
+      systems = policy.spec.systems;
       forAllSystems =
         function:
         builtins.listToAttrs (
@@ -25,46 +26,28 @@
           }) systems
         );
     in
+    assert nixpkgs.rev == policy.spec.nixpkgs.revision;
+    assert nixpkgs.narHash == policy.spec.nixpkgs.nar_hash;
     {
       packages = forAllSystems (
         system: pkgs:
         let
-          biomeTarget =
-            {
-              aarch64-darwin = {
-                asset = "biome-darwin-arm64";
-                hash = "sha256-UA/Ij/QJJe1CKtzKa4o+kFJu6QTSuhCw7eDNBl/KPSs=";
-              };
-              x86_64-linux = {
-                asset = "biome-linux-x64";
-                hash = "sha256-klh/rBAuM8v4qx/bSIT49Ny/ERcln8bezVy1tfXkjmc=";
-              };
-            }
-            .${system};
-          biome = pkgs.runCommand "biome-2.3.11" { } ''
+          biomePolicy = policy.spec.tools.biome;
+          biomeTarget = biomePolicy.targets.${system};
+          biome = pkgs.runCommand "biome-${biomePolicy.version}" { } ''
             install -D -m 0755 ${
               pkgs.fetchurl {
-                url = "https://github.com/biomejs/biome/releases/download/%40biomejs/biome%402.3.11/${biomeTarget.asset}";
+                url = "https://github.com/biomejs/biome/releases/download/%40biomejs/biome%40${biomePolicy.version}/${biomeTarget.asset}";
                 inherit (biomeTarget) hash;
               }
             } "$out/bin/biome"
           '';
-          opaTarget =
-            {
-              aarch64-darwin = {
-                asset = "opa_darwin_arm64";
-                hash = "sha256-K4BdR2CZ+Bgo4KckZvI7fF9wNejlGCP14e88v08jIc4=";
-              };
-              x86_64-linux = {
-                asset = "opa_linux_amd64";
-                hash = "sha256-SBTKr4kGK5kp5zc8dF6xtzvoqjR75h2gZJH2j+kQJFs=";
-              };
-            }
-            .${system};
-          opa = pkgs.runCommand "opa-1.20.1" { } ''
+          opaPolicy = policy.spec.tools.opa;
+          opaTarget = opaPolicy.targets.${system};
+          opa = pkgs.runCommand "opa-${opaPolicy.version}" { } ''
             install -D -m 0755 ${
               pkgs.fetchurl {
-                url = "https://github.com/open-policy-agent/opa/releases/download/v1.20.1/${opaTarget.asset}";
+                url = "https://github.com/open-policy-agent/opa/releases/download/v${opaPolicy.version}/${opaTarget.asset}";
                 inherit (opaTarget) hash;
               }
             } "$out/bin/opa"
@@ -132,6 +115,9 @@
               schema_version = "mindclade-toolchain.v1";
               repository = "mindclade/.github";
               inherit system;
+              authority = manifestDefaults.authority;
+              supported_systems = manifestDefaults.supported_systems;
+              lock_digests = manifestDefaults.locks;
               nixpkgs = {
                 revision = nixpkgs.rev;
                 nar_hash = nixpkgs.narHash;
@@ -255,7 +241,12 @@
                 test "$(bazel --version)" = "bazel 9.1.1"
                 grep -Fq '>=9.1.1' ${self}/MODULE.bazel
                 grep -Fq '<=9.1.1' ${self}/MODULE.bazel
-                jq -e '.schema_version == "mindclade-toolchain.v1" and .bazel.version == "9.1.1"' \
+                jq -e '
+                  .schema_version == "mindclade-toolchain.v1" and
+                  .bazel.version == "9.1.1" and
+                  (.supported_systems == ["aarch64-darwin", "aarch64-linux", "x86_64-linux"]) and
+                  (.authority.policy_digest | test("^sha256:[0-9a-f]{64}$"))
+                ' \
                   ${toolchain}/share/mindclade/toolchain-manifest.json >/dev/null
                 mkdir -p "$out"
                 printf '%s\n' '${nixpkgs.rev}' > "$out/nixpkgs-revision"

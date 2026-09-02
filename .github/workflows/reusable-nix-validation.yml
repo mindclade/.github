@@ -44,81 +44,158 @@ on:
 
 concurrency:
   group: mindclade-org-nix-validation-${{ github.repository }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions: {}
 
+env:
+  NIX_CONFIG: |
+    experimental-features = nix-command flakes
+    accept-flake-config = false
+    substituters = https://cache.nixos.org/
+    trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
+    require-sigs = true
+
 jobs:
-  validate:
-    name: Mindclade / Nix Validation
+  prepare:
+    name: Mindclade / Nix Prepare
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 10
     permissions:
       contents: read
-    env:
-      NIX_CONFIG: |
-        experimental-features = nix-command flakes
-        accept-flake-config = false
-        substituters = https://cache.nixos.org/
-        trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
-        require-sigs = true
     outputs:
-      correlation_id: ${{ steps.context.outputs.correlation_id }}
-      source_revision: ${{ inputs.source_revision }}
       caller_repository: ${{ github.repository }}
-      trust_classification: ${{ steps.context.outputs.source_trust }}
+      context_json: ${{ steps.context.outputs.context_json }}
+      correlation_id: ${{ steps.context.outputs.correlation_id }}
       execution_tier: ${{ steps.context.outputs.execution_tier }}
-      plan_id: nix-validation-v1
-      build_id: ${{ github.run_id }}
-      conclusion: ${{ steps.result.outputs.conclusion }}
-      reason_code: ${{ steps.result.outputs.reason_code }}
-      evidence_digest: ${{ steps.evidence.outputs.evidence_digest }}
-      evidence_ref: ${{ steps.evidence.outputs.evidence_ref }}
+      trust_classification: ${{ steps.context.outputs.source_trust }}
     steps:
       - id: context
         name: Validate caller context
         continue-on-error: true
-        uses: $/.github/actions/validate-trusted-context
+        uses: mindclade/.github/.github/actions/validate-trusted-context@aabf14ba287eb3453cf9f42e19674df308564d1b
         with:
           expected-source-revision: ${{ inputs.source_revision }}
       - id: pins
         name: Verify immutable implementation closure
         continue-on-error: true
-        uses: $/.github/actions/verify-pinned-actions
+        uses: mindclade/.github/.github/actions/verify-pinned-actions@aabf14ba287eb3453cf9f42e19674df308564d1b
+      - name: Enforce trusted preparation
+        if: always()
+        env:
+          CONTEXT_OUTCOME: ${{ steps.context.outcome }}
+          PINS_OUTCOME: ${{ steps.pins.outcome }}
+        run: |
+          set -euo pipefail
+          [[ "${CONTEXT_OUTCOME}" == success ]]
+          [[ "${PINS_OUTCOME}" == success ]]
+
+  evaluate:
+    name: Mindclade / Nix All Systems Evaluation
+    needs: prepare
+    if: needs.prepare.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
       - name: Check out exact caller revision
-        if: steps.context.outcome == 'success' && steps.pins.outcome == 'success'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           ref: ${{ inputs.source_revision }}
           persist-credentials: false
       - name: Stage the checksum-verified Nix installer
-        if: steps.context.outcome == 'success' && steps.pins.outcome == 'success'
         env:
+          NIX_INSTALLER_ASSET: nix-installer-x86_64-linux
           NIX_INSTALLER_SHA256: f964e78c30bb096d1449179d738eeae8f9410df1623d42fe7da972643e0d0e74
-          NIX_INSTALLER_URL: https://github.com/DeterminateSystems/nix-installer/releases/download/v3.12.2/nix-installer-x86_64-linux
+          NIX_INSTALLER_VERSION: v3.12.2
         run: |
           set -euo pipefail
           install_root="${RUNNER_TEMP}/nix-installer"
-          installer="${install_root}/nix-installer-x86_64-linux"
+          installer="${install_root}/${NIX_INSTALLER_ASSET}"
           mkdir -m 0700 "${install_root}"
           curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
             --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
-            --output "${installer}" "${NIX_INSTALLER_URL}"
-          printf '%s  %s\n' "${NIX_INSTALLER_SHA256}" "${installer}" | sha256sum --check --strict
+            --output "${installer}" \
+            "https://github.com/DeterminateSystems/nix-installer/releases/download/${NIX_INSTALLER_VERSION}/${NIX_INSTALLER_ASSET}"
+          test "$(openssl dgst -sha256 "${installer}" | awk '{print $NF}')" = "${NIX_INSTALLER_SHA256}"
           chmod 0755 "${installer}"
       - name: Install the reviewed Nix runtime
-        if: steps.context.outcome == 'success' && steps.pins.outcome == 'success'
-        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v3.15.1 action, v3.12.2 installer below
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v3.15.1 action, v3.12.2 installer above
         with:
           determinate: true
           local-root: ${{ runner.temp }}/nix-installer
-      - id: check
-        name: Validate the locked repository toolchain
-        if: steps.context.outcome == 'success' && steps.pins.outcome == 'success'
-        continue-on-error: true
+      - name: Evaluate the complete standard-system closure
         run: |
           set -euo pipefail
+          nix flake check --all-systems --no-build --no-accept-flake-config --no-update-lock-file
+          expected='["aarch64-darwin","aarch64-linux","x86_64-linux"]'
+          for output in packages checks devShells formatter; do
+            observed="$(nix eval --json --no-accept-flake-config --no-update-lock-file \
+              --apply builtins.attrNames ".#${output}")"
+            jq -e --argjson expected "${expected}" \
+              '($expected - .) == []' <<< "${observed}" >/dev/null
+          done
+
+  native:
+    name: Mindclade / Nix Native (${{ matrix.system }})
+    needs: prepare
+    if: needs.prepare.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - system: aarch64-darwin
+            runner: macos-14
+            installer_asset: nix-installer-aarch64-darwin
+            installer_sha256: fa3293632cff8b347189af1b3afd66c5e81ac89f88ffc5d60156769fc2c8df77
+          - system: aarch64-linux
+            runner: ubuntu-24.04-arm
+            installer_asset: nix-installer-aarch64-linux
+            installer_sha256: 35430c4d8ef9dc433a0e2b36695b2b6267633962c3792f008d5b240ca9de361b
+          - system: x86_64-linux
+            runner: ubuntu-24.04
+            installer_asset: nix-installer-x86_64-linux
+            installer_sha256: f964e78c30bb096d1449179d738eeae8f9410df1623d42fe7da972643e0d0e74
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Check out exact caller revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.source_revision }}
+          persist-credentials: false
+      - name: Stage the native checksum-verified Nix installer
+        env:
+          NIX_INSTALLER_ASSET: ${{ matrix.installer_asset }}
+          NIX_INSTALLER_SHA256: ${{ matrix.installer_sha256 }}
+          NIX_INSTALLER_VERSION: v3.12.2
+        run: |
+          set -euo pipefail
+          install_root="${RUNNER_TEMP}/nix-installer"
+          installer="${install_root}/${NIX_INSTALLER_ASSET}"
+          mkdir -m 0700 "${install_root}"
+          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' \
+            --tlsv1.2 --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
+            --output "${installer}" \
+            "https://github.com/DeterminateSystems/nix-installer/releases/download/${NIX_INSTALLER_VERSION}/${NIX_INSTALLER_ASSET}"
+          test "$(openssl dgst -sha256 "${installer}" | awk '{print $NF}')" = "${NIX_INSTALLER_SHA256}"
+          chmod 0755 "${installer}"
+      - name: Install the reviewed native Nix runtime
+        uses: DeterminateSystems/nix-installer-action@ef8a148080ab6020fd15196c2084a2eea5ff2d25 # v3.15.1 action, v3.12.2 installer above
+        with:
+          determinate: true
+          local-root: ${{ runner.temp }}/nix-installer
+      - name: Validate the native toolchain, flake, and Bazel graph
+        env:
+          EXPECTED_SYSTEM: ${{ matrix.system }}
+        run: |
+          set -euo pipefail
+          test "$(nix eval --impure --raw --expr builtins.currentSystem)" = "${EXPECTED_SYSTEM}"
           nix config show --json | jq -e '
             def config_value:
               if type == "object" and has("value") then .value else . end;
@@ -130,42 +207,65 @@ jobs:
           ' >/dev/null
           nix build --no-accept-flake-config --no-update-lock-file .#toolchain
           nix flake check --no-accept-flake-config --no-update-lock-file --print-build-logs
-          nix develop --no-accept-flake-config --no-update-lock-file .#ci --command just ci
+          nix develop --no-accept-flake-config --no-update-lock-file .#ci --command \
+            bazel query //... >/dev/null
+          if [[ "${EXPECTED_SYSTEM}" == x86_64-linux ]]; then
+            nix develop --no-accept-flake-config --no-update-lock-file .#ci --command just ci
+          fi
+
+  validate:
+    name: Mindclade / Nix Validation
+    needs: [prepare, evaluate, native]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      correlation_id: ${{ needs.prepare.outputs.correlation_id }}
+      source_revision: ${{ inputs.source_revision }}
+      caller_repository: ${{ needs.prepare.outputs.caller_repository }}
+      trust_classification: ${{ needs.prepare.outputs.trust_classification }}
+      execution_tier: ${{ needs.prepare.outputs.execution_tier }}
+      plan_id: nix-validation-v2
+      build_id: ${{ github.run_id }}
+      conclusion: ${{ steps.result.outputs.conclusion }}
+      reason_code: ${{ steps.result.outputs.reason_code }}
+      evidence_digest: ${{ steps.evidence.outputs.evidence_digest }}
+      evidence_ref: ${{ steps.evidence.outputs.evidence_ref }}
+    steps:
       - id: result
-        name: Normalize result
-        if: always()
+        name: Normalize every required shard result
         env:
-          CHECK_OUTCOME: ${{ steps.check.outcome }}
-          CONTEXT_OUTCOME: ${{ steps.context.outcome }}
-          CONTEXT_REASON: ${{ steps.context.outputs.reason_code }}
-          PINS_OUTCOME: ${{ steps.pins.outcome }}
-          PINS_REASON: ${{ steps.pins.outputs.reason_code }}
+          EVALUATE_RESULT: ${{ needs.evaluate.result }}
+          NATIVE_RESULT: ${{ needs.native.result }}
+          PREPARE_RESULT: ${{ needs.prepare.result }}
         run: |
           set -euo pipefail
           conclusion=success
-          reason=NIX_VALIDATION_PASSED
-          if [[ "${CONTEXT_OUTCOME}" != success ]]; then
+          reason=NIX_STANDARD_SYSTEMS_PASSED
+          if [[ "${PREPARE_RESULT}" != success ]]; then
             conclusion=action_required
-            reason="${CONTEXT_REASON:-CONTEXT_INVALID}"
-          elif [[ "${PINS_OUTCOME}" != success ]]; then
+            reason=NIX_PREPARATION_FAILED
+          elif [[ "${EVALUATE_RESULT}" != success ]]; then
             conclusion=failure
-            reason="${PINS_REASON:-PIN_POLICY_FAILED}"
-          elif [[ "${CHECK_OUTCOME}" != success ]]; then
+            reason=NIX_ALL_SYSTEMS_EVALUATION_FAILED
+          elif [[ "${NATIVE_RESULT}" != success ]]; then
             conclusion=failure
-            reason=NIX_VALIDATION_FAILED
+            reason=NIX_NATIVE_QUALIFICATION_FAILED
           fi
           printf 'conclusion=%s\nreason_code=%s\n' "${conclusion}" "${reason}" >> "${GITHUB_OUTPUT}"
       - id: evidence
         name: Publish CI evidence
-        if: always() && steps.context.outputs.context_json != ''
+        if: always() && needs.prepare.outputs.context_json != ''
         continue-on-error: true
-        uses: $/.github/actions/publish-ci-evidence
+        uses: mindclade/.github/.github/actions/publish-ci-evidence@aabf14ba287eb3453cf9f42e19674df308564d1b
         with:
-          context-json: ${{ steps.context.outputs.context_json }}
+          context-json: ${{ needs.prepare.outputs.context_json }}
           producer: github_actions
           conclusion: ${{ steps.result.outputs.conclusion }}
           reason-code: ${{ steps.result.outputs.reason_code }}
-          plan-id: nix-validation-v1
+          plan-id: nix-validation-v2
           build-id: ${{ github.run_id }}
           artifact-name: nix-validation-evidence-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Enforce result

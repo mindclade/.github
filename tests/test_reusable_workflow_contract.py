@@ -67,7 +67,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
     def test_repository_matches_the_approved_inventory(self) -> None:
         outcome = validator.validate_inventory(ROOT)
         self.assertTrue(outcome["ok"], outcome["errors"])
-        self.assertEqual(71, outcome["expected"])
+        self.assertEqual(len(validator.EXPECTED_INVENTORY), outcome["expected"])
         self.assertIn(".github/actionlint.yaml", validator.EXPECTED_INVENTORY)
         self.assertIn(".github/workflows/pull-request.yml", validator.EXPECTED_INVENTORY)
         self.assertIn(
@@ -81,14 +81,78 @@ class ReusableWorkflowContractTest(unittest.TestCase):
         self.assertIsInstance(document, dict)
         self.assertEqual("Pull request", document["name"])
         self.assertEqual(
-            {"pull_request", "merge_group", "push", "workflow_dispatch"},
+            {"pull_request", "pull_request_review", "merge_group"},
             set(document["on"]),
         )
-        self.assertEqual(["main"], document["on"]["push"]["branches"])
-        self.assertEqual({"contents": "read"}, document["permissions"])
+        self.assertIn("labeled", document["on"]["pull_request"]["types"])
+        self.assertIn("dismissed", document["on"]["pull_request_review"]["types"])
+        self.assertEqual(["checks_requested"], document["on"]["merge_group"]["types"])
+        self.assertEqual({}, document["permissions"])
+        self.assertEqual(
+            [], validator._organization_required_errors(document, workflow.relative_to(ROOT))
+        )
         required = document["jobs"]["required"]
         self.assertEqual("required", required["name"])
-        self.assertEqual({"contents": "read"}, required["permissions"])
+        self.assertEqual({}, required["permissions"])
+        revisions = {
+            document["jobs"][name]["uses"].rsplit("@", 1)[1]
+            for name in (
+                "nix_validation",
+                "classify",
+                "fork_checks",
+                "dispatch",
+                "buildkite_required",
+            )
+        }
+        self.assertEqual({"e90483097890030ede19981503f443a602a8e6e5"}, revisions)
+
+    def test_required_profile_action_exports_expression_safe_outputs(self) -> None:
+        action = ROOT / ".github/actions/required-workflow-profile/action.yml"
+        document, parse_error = validator._parsed_yaml(action, ROOT)
+        self.assertIsNone(parse_error)
+        self.assertIsInstance(document, dict)
+        outputs = document["outputs"]
+        self.assertEqual(
+            {
+                "profile",
+                "event_class",
+                "affected_shards_json",
+                "not_required_shards_json",
+                "policy_digest",
+                "decision",
+                "reason_code",
+                "evidence_path",
+            },
+            set(outputs),
+        )
+        for name, definition in outputs.items():
+            with self.subTest(output=name):
+                self.assertRegex(name, r"^[a-z][a-z0-9_]*$")
+                self.assertEqual(f"${{{{ steps.policy.outputs.{name} }}}}", definition["value"])
+
+    def test_organization_required_workflow_rejects_contract_weakening(self) -> None:
+        source = (ROOT / validator.ORGANIZATION_REQUIRED_WORKFLOW_PATH).read_text(encoding="utf-8")
+        mutations = (
+            source.replace("name: Pull request", "name: Mutable CI", 1),
+            source.replace("  merge_group:\n", "  workflow_dispatch:\n  merge_group:\n", 1),
+            source.replace(
+                'all($affected[]; $results[.] == "success")',
+                'any($affected[]; $results[.] == "success")',
+                1,
+            ),
+            source.replace(
+                "reusable-nix-validation.yml@e90483097890030ede19981503f443a602a8e6e5",
+                "reusable-nix-validation.yml@" + "a" * 40,
+                1,
+            ),
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                workflow = root / validator.ORGANIZATION_REQUIRED_WORKFLOW_PATH
+                workflow.parent.mkdir(parents=True)
+                workflow.write_text(mutation, encoding="utf-8")
+                self.assertFalse(validator.validate_workflows(root)["ok"])
 
     def test_nix_config_guards_accept_wrapped_and_scalar_values(self) -> None:
         approved = {
@@ -103,10 +167,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             approved,
             {key: {"value": value, "source": "workflow"} for key, value in approved.items()},
         )
-        workflow_paths = (
-            ".github/workflows/pull-request.yml",
-            ".github/workflows/reusable-nix-validation.yml",
-        )
+        workflow_paths = (".github/workflows/reusable-nix-validation.yml",)
         for workflow_path in workflow_paths:
             source = (ROOT / workflow_path).read_text(encoding="utf-8")
             jq_filter = source.split("nix config show --json | jq -e '\n", 1)[1].split(
@@ -390,10 +451,31 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             with self.subTest(group=group):
                 document = {
                     "jobs": {"test": {"runs-on": "ubuntu-24.04"}},
-                    "concurrency": {"group": group, "cancel-in-progress": True},
+                    "concurrency": {
+                        "group": group,
+                        "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+                    },
                 }
                 errors = validator._bounded_concurrency_errors(document, reusable_path)
                 self.assertTrue(any(expected_error in error for error in errors), errors)
+
+        valid_group = (
+            "reusable-${{ github.repository }}-${{ github.workflow }}-"
+            "${{ github.event.pull_request.number || github.ref }}"
+        )
+        for cancellation in (True, False, "${{ github.event_name != 'merge_group' }}"):
+            with self.subTest(cancellation=cancellation):
+                errors = validator._bounded_concurrency_errors(
+                    {
+                        "jobs": {"test": {"runs-on": "ubuntu-24.04"}},
+                        "concurrency": {
+                            "group": valid_group,
+                            "cancel-in-progress": cancellation,
+                        },
+                    },
+                    reusable_path,
+                )
+                self.assertTrue(any("only pull_request" in error for error in errors), errors)
 
     def test_buildkite_secret_classification_uses_the_repository_path_not_display_name(
         self,
@@ -561,7 +643,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             root = Path(temporary)
             workflows = root / ".github/workflows"
             workflows.mkdir(parents=True)
-            (workflows / "pull-request.yml").write_text(
+            (workflows / "example.yml").write_text(
                 "on: [push]\npermissions: {}\n", encoding="utf-8"
             )
             outcome = validator.validate(
@@ -873,6 +955,50 @@ class ReusableWorkflowContractTest(unittest.TestCase):
                 os.environ.clear()
                 os.environ.update(old_environment)
             self.assertEqual("untrusted", outcome["context"]["source_trust"])
+            self.assertEqual("untrusted", outcome["context"]["execution_tier"])
+
+    def test_context_maps_review_refresh_to_the_pull_request_head(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            event = Path(temporary) / "event.json"
+            event.write_text(
+                json.dumps(
+                    {
+                        "pull_request": {
+                            "head": {
+                                "sha": SHA,
+                                "ref": "feature/review-refresh",
+                                "repo": {"fork": False},
+                            },
+                            "base": {"sha": "b" * 40},
+                        },
+                        "review": {"state": "approved"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            old_environment = os.environ.copy()
+            try:
+                os.environ.update(
+                    {
+                        "GITHUB_EVENT_NAME": "pull_request_review",
+                        "GITHUB_ACTOR": "mindclade-bot",
+                        "GITHUB_REF": "refs/pull/7/merge",
+                        "GITHUB_REF_PROTECTED": "false",
+                        "GITHUB_REPOSITORY": "mindclade/.github",
+                        "GITHUB_SHA": "c" * 40,
+                        "GITHUB_WORKFLOW_REF": (
+                            "mindclade/.github/.github/workflows/pull-request.yml@" + SHA
+                        ),
+                    }
+                )
+                outcome = validator.trusted_context(event, SHA, {"untrusted"})
+            finally:
+                os.environ.clear()
+                os.environ.update(old_environment)
+            self.assertEqual("allow", outcome["verdict"])
+            self.assertEqual(SHA, outcome["context"]["source_revision"])
+            self.assertEqual("refs/heads/feature/review-refresh", outcome["context"]["ref"])
+            self.assertEqual("trusted", outcome["context"]["source_trust"])
             self.assertEqual("untrusted", outcome["context"]["execution_tier"])
 
     def test_context_rejects_ambiguous_pull_request_fork_provenance(self) -> None:

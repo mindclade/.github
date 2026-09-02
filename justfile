@@ -33,6 +33,9 @@ lint:
 test:
     {{ bazel }} test --config=ci --symlink_prefix=/ //:self_test
 
+generated-check:
+    python3 tools/generate_ci_policy.py check --root "{{ justfile_directory() }}"
+
 policy:
     {{ bazel }} build --config=ci --symlink_prefix=/ //:policy_check
 
@@ -42,7 +45,7 @@ workflows:
 flake-check:
     nix flake check --no-accept-flake-config --no-build --no-update-lock-file
 
-check: format-check lint policy workflows test flake-check
+check: generated-check format-check lint policy workflows test flake-check
 
 ci: check
 

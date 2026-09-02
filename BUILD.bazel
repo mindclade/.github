@@ -75,6 +75,19 @@ filegroup(
 )
 
 filegroup(
+    name = "generated_policy_sources",
+    srcs = [
+        ".github/actions/required-workflow-profile/profiles.generated.json",
+        "config/nix-bazel-policy.json",
+        "config/required-workflow-profiles.json",
+        "generated/bazelrc.common",
+        "generated/nix-bazel-policy.lock.json",
+        "generated/nix-bazel-policy.nix",
+        "generated/toolchain-manifest.defaults.json",
+    ],
+)
+
+filegroup(
     name = "repository_governance_sources",
     srcs = [
         ".bazelignore",
@@ -191,6 +204,14 @@ py_binary(
     main = "tools/emit_ci_evidence.py",
 )
 
+py_binary(
+    name = "generate_ci_policy",
+    srcs = ["tools/generate_ci_policy.py"],
+    data = [":generated_policy_sources"],
+    legacy_create_init = 0,
+    main = "tools/generate_ci_policy.py",
+)
+
 py_test(
     name = "reusable_workflow_contract_test",
     srcs = [
@@ -247,11 +268,40 @@ py_test(
     main = "tests/test_action_digest_pinning.py",
 )
 
+py_test(
+    name = "generated_ci_policy_test",
+    srcs = [
+        "tests/test_generated_ci_policy.py",
+        "tools/generate_ci_policy.py",
+    ],
+    data = [
+        "MODULE.bazel.lock",
+        "flake.lock",
+        ":generated_policy_sources",
+    ],
+    imports = ["tools"],
+    legacy_create_init = 0,
+    main = "tests/test_generated_ci_policy.py",
+)
+
+py_test(
+    name = "required_workflow_profile_test",
+    srcs = [
+        ".github/actions/required-workflow-profile/required_workflow_profile.py",
+        "tests/test_required_workflow_profile.py",
+    ],
+    data = [":generated_policy_sources"],
+    legacy_create_init = 0,
+    main = "tests/test_required_workflow_profile.py",
+)
+
 test_suite(
     name = "self_test",
     tests = [
         ":action_digest_pinning_test",
         ":declared_permissions_test",
+        ":generated_ci_policy_test",
+        ":required_workflow_profile_test",
         ":reusable_workflow_contract_test",
     ],
 )

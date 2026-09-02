@@ -54,7 +54,7 @@ on:
 
 concurrency:
   group: mindclade-org-codeql-${{ github.repository }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions: {}
 
@@ -75,11 +75,11 @@ jobs:
     steps:
       - id: context
         name: Validate caller context
-        uses: $/.github/actions/validate-trusted-context
+        uses: mindclade/.github/.github/actions/validate-trusted-context@aabf14ba287eb3453cf9f42e19674df308564d1b
         with:
           expected-source-revision: ${{ inputs.source_revision }}
       - name: Verify immutable implementation closure
-        uses: $/.github/actions/verify-pinned-actions
+        uses: mindclade/.github/.github/actions/verify-pinned-actions@aabf14ba287eb3453cf9f42e19674df308564d1b
       - name: Validate CodeQL configuration
         env:
           BUILD_MODE: ${{ inputs.build_mode }}
@@ -193,7 +193,7 @@ jobs:
         name: Publish CI evidence
         if: always()
         continue-on-error: true
-        uses: $/.github/actions/publish-ci-evidence
+        uses: mindclade/.github/.github/actions/publish-ci-evidence@aabf14ba287eb3453cf9f42e19674df308564d1b
         with:
           context-json: ${{ needs.prepare.outputs.context_json }}
           producer: github_actions
@@ -298,7 +298,7 @@ jobs:
         name: Publish CI evidence
         if: always()
         continue-on-error: true
-        uses: $/.github/actions/publish-ci-evidence
+        uses: mindclade/.github/.github/actions/publish-ci-evidence@aabf14ba287eb3453cf9f42e19674df308564d1b
         with:
           context-json: ${{ needs.prepare.outputs.context_json }}
           producer: github_actions

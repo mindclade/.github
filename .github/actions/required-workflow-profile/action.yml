@@ -1,0 +1,73 @@
+name: Required workflow profile
+description: Resolve a fixed estate CI profile or evaluate its pull-request review policy.
+inputs:
+  mode:
+    description: Fixed operation selected by the organization-required workflow.
+    required: true
+  repository:
+    description: Exact owner/name repository identity from GitHub context.
+    required: true
+  event-name:
+    description: Exact GitHub event name.
+    required: true
+  source-revision:
+    description: Exact source commit under evaluation.
+    required: true
+  pull-request-number:
+    description: Pull-request number for review evaluation.
+    required: false
+    default: ""
+  github-token:
+    description: Read-only token used only in review mode.
+    required: false
+    default: ""
+outputs:
+  profile:
+    description: Fixed repository CI profile.
+    value: ${{ steps.policy.outputs.profile }}
+  event_class:
+    description: Normalized pull_request or merge_group event class.
+    value: ${{ steps.policy.outputs.event_class }}
+  affected_shards_json:
+    description: Canonical JSON array of shards that must succeed.
+    value: ${{ steps.policy.outputs.affected_shards_json }}
+  not_required_shards_json:
+    description: Canonical JSON array of shards that must be skipped.
+    value: ${{ steps.policy.outputs.not_required_shards_json }}
+  policy_digest:
+    description: Digest of the immutable generated profile catalog.
+    value: ${{ steps.policy.outputs.policy_digest }}
+  decision:
+    description: "Review decision: approved, bypassed, or denied."
+    value: ${{ steps.policy.outputs.decision }}
+  reason_code:
+    description: Stable review-policy reason code.
+    value: ${{ steps.policy.outputs.reason_code }}
+  evidence_path:
+    description: Local canonical review evidence path.
+    value: ${{ steps.policy.outputs.evidence_path }}
+runs:
+  using: composite
+  steps:
+    - id: policy
+      name: Evaluate the immutable profile policy
+      shell: bash
+      env:
+        EVENT_NAME: ${{ inputs.event-name }}
+        EXPECTED_SOURCE_REVISION: ${{ inputs.source-revision }}
+        GITHUB_API_URL: ${{ github.api_url }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        MODE: ${{ inputs.mode }}
+        PULL_REQUEST_NUMBER: ${{ inputs.pull-request-number }}
+        REPOSITORY: ${{ inputs.repository }}
+      run: >-
+        python3 "$GITHUB_ACTION_PATH/required_workflow_profile.py"
+        "$MODE"
+        --profiles "$GITHUB_ACTION_PATH/profiles.generated.json"
+        --repository "$REPOSITORY"
+        --event-name "$EVENT_NAME"
+        --source-revision "$EXPECTED_SOURCE_REVISION"
+        --pull-request-number "$PULL_REQUEST_NUMBER"
+        --api-url "$GITHUB_API_URL"
+        --github-output "$GITHUB_OUTPUT"
+        --evidence-path "$RUNNER_TEMP/review-policy-evidence.json"

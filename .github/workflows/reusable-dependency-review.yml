@@ -48,7 +48,7 @@ on:
 
 concurrency:
   group: mindclade-org-dependency-review-${{ github.repository }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions: {}
 
@@ -75,14 +75,14 @@ jobs:
       - id: context
         name: Validate caller context
         continue-on-error: true
-        uses: $/.github/actions/validate-trusted-context
+        uses: mindclade/.github/.github/actions/validate-trusted-context@aabf14ba287eb3453cf9f42e19674df308564d1b
         with:
           expected-source-revision: ${{ inputs.source_revision }}
           allowed-execution-tiers: untrusted
       - id: pins
         name: Verify immutable implementation closure
         continue-on-error: true
-        uses: $/.github/actions/verify-pinned-actions
+        uses: mindclade/.github/.github/actions/verify-pinned-actions@aabf14ba287eb3453cf9f42e19674df308564d1b
       - id: base
         name: Bind observed base revision
         if: steps.context.outcome == 'success' && steps.pins.outcome == 'success'
@@ -145,7 +145,7 @@ jobs:
         name: Publish CI evidence
         if: always() && steps.context.outputs.context_json != ''
         continue-on-error: true
-        uses: $/.github/actions/publish-ci-evidence
+        uses: mindclade/.github/.github/actions/publish-ci-evidence@aabf14ba287eb3453cf9f42e19674df308564d1b
         with:
           context-json: ${{ steps.context.outputs.context_json }}
           producer: github_actions

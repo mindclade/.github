@@ -26,7 +26,15 @@
     "repository": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" },
     "actor": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,38}(?:\\[bot\\])?$" },
     "event_name": {
-      "enum": ["pull_request", "push", "release", "schedule", "workflow_dispatch", "merge_group"]
+      "enum": [
+        "pull_request",
+        "pull_request_review",
+        "push",
+        "release",
+        "schedule",
+        "workflow_dispatch",
+        "merge_group"
+      ]
     },
     "ref": { "type": "string", "pattern": "^refs/(heads|tags)/[A-Za-z0-9._/-]+$" },
     "source_revision": { "$ref": "#/$defs/gitSha" },
@@ -44,7 +52,9 @@
   "allOf": [
     {
       "if": {
-        "properties": { "event_name": { "enum": ["pull_request", "merge_group"] } },
+        "properties": {
+          "event_name": { "enum": ["pull_request", "pull_request_review", "merge_group"] }
+        },
         "required": ["event_name"]
       },
       "then": { "properties": { "execution_tier": { "const": "untrusted" } } }

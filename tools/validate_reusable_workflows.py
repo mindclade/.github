@@ -19,16 +19,17 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 SHA = re.compile(r"^[0-9a-f]{40}$")
-IMPLEMENTATION_ACTION = re.compile(
-    r"^\$/\.github/actions/[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
-)
 SELF_TEST_LOCAL_ACTION = re.compile(
     r"^\./\.github/actions/[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$"
 )
+TRUSTED_CONTEXT_ACTION = "mindclade/.github/.github/actions/validate-trusted-context@aabf14ba287eb3453cf9f42e19674df308564d1b"
+PIN_VERIFICATION_ACTION = "mindclade/.github/.github/actions/verify-pinned-actions@aabf14ba287eb3453cf9f42e19674df308564d1b"
+REQUIRED_PROFILE_ACTION = "mindclade/.github/.github/actions/required-workflow-profile@e90483097890030ede19981503f443a602a8e6e5"
 SELF_TEST_WORKFLOW_PATH = ".github/workflows/pull-request.yml"
 REQUIRED_CHECK_WORKFLOW_PATH = ".github/workflows/reusable-required-check.yml"
 BUILDKITE_DISPATCH_WORKFLOW_PATH = ".github/workflows/reusable-buildkite-dispatch.yml"
 BUILDKITE_BRIDGE_TEMPLATE_PATH = "workflow-templates/buildkite-bridge.yml"
+ORGANIZATION_REQUIRED_WORKFLOW_PATH = ".github/workflows/pull-request.yml"
 REQUIRED_CHECK_CALL = re.compile(
     r"^mindclade/\.github/\.github/workflows/reusable-required-check\.yml@[0-9a-f]{40}$"
 )
@@ -55,7 +56,7 @@ DOCUMENTATION_REQUIRED_HEADINGS = {
     "profile/README.md": frozenset({"Activation boundary"}),
 }
 APPROVED_SCORECARD_WORKFLOW_SHA256 = (
-    "bb633c52d5b541d4d4461f61598f81a63265157727cf91a8c27f797e53efe3b4"
+    "b8853d958f425c4b2c05de9ddec4ad64492767cc85558acad68b64d40c37693e"
 )
 COMMON_WORKFLOW_OUTPUTS = (
     "correlation_id",
@@ -100,6 +101,7 @@ ALLOWED_PERMISSIONS = {
     "checks": "write",
     "contents": "read",
     "id-token": "write",
+    "issues": "read",
     "pull-requests": "read",
     "security-events": "write",
 }
@@ -135,6 +137,10 @@ EXPECTED_INVENTORY = frozenset(
         ".github/actions/verify-pinned-actions/README.md",
         ".github/actions/publish-ci-evidence/action.yml",
         ".github/actions/publish-ci-evidence/README.md",
+        ".github/actions/required-workflow-profile/action.yml",
+        ".github/actions/required-workflow-profile/README.md",
+        ".github/actions/required-workflow-profile/profiles.generated.json",
+        ".github/actions/required-workflow-profile/required_workflow_profile.py",
         ".github/workflows/reusable-buildkite-dispatch.yml",
         ".github/workflows/reusable-required-check.yml",
         ".github/workflows/reusable-nix-validation.yml",
@@ -160,6 +166,12 @@ EXPECTED_INVENTORY = frozenset(
         "workflow-templates/repository-metadata.properties.json",
         "schemas/trusted_context.schema.json",
         "schemas/ci_evidence.schema.json",
+        "config/nix-bazel-policy.json",
+        "config/required-workflow-profiles.json",
+        "generated/bazelrc.common",
+        "generated/nix-bazel-policy.lock.json",
+        "generated/nix-bazel-policy.nix",
+        "generated/toolchain-manifest.defaults.json",
         "policy/action_pinning.rego",
         "policy/workflow_permissions.rego",
         "policy/reusable_workflow_interface.rego",
@@ -171,9 +183,12 @@ EXPECTED_INVENTORY = frozenset(
         "tests/fixtures/protected_release.json",
         "tests/test_reusable_workflow_contract.py",
         "tests/test_declared_permissions.py",
+        "tests/test_generated_ci_policy.py",
         "tests/test_action_digest_pinning.py",
+        "tests/test_required_workflow_profile.py",
         "tools/validate_reusable_workflows.py",
         "tools/emit_ci_evidence.py",
+        "tools/generate_ci_policy.py",
         "BUILD.bazel",
         ".bazelignore",
         ".bazelrc",
@@ -816,11 +831,7 @@ def _pin_reference_error(relative: Path, reference: Any) -> str | None:
             return None
         return f"{relative}: caller-checkout local action reference is forbidden: {reference}"
     if reference.startswith("$/"):
-        if relative.as_posix() == SELF_TEST_WORKFLOW_PATH:
-            return f"{relative}: repository self-test must use an exact ./.github/actions/ local action reference: {reference}"
-        if IMPLEMENTATION_ACTION.fullmatch(reference) and ".." not in reference.split("/"):
-            return None
-        return f"{relative}: invalid implementation action reference {reference}"
+        return f"{relative}: invalid GitHub Actions uses reference {reference}"
     if "@" not in reference:
         return f"{relative}: unpinned uses reference {reference}"
     source, revision = reference.rsplit("@", 1)
@@ -1007,7 +1018,7 @@ def _has_trusted_context_producer(document: Any, jobs: Any) -> bool:
     context = context_steps[0]
     if context is not steps[0]:
         return False
-    if context.get("uses") != "$/.github/actions/validate-trusted-context":
+    if context.get("uses") != TRUSTED_CONTEXT_ACTION:
         return False
     if context.get("continue-on-error", False) is not False or "if" in context or "env" in context:
         return False
@@ -1020,7 +1031,7 @@ def _has_trusted_context_producer(document: Any, jobs: Any) -> bool:
     pin_steps = [
         step
         for step in steps
-        if isinstance(step, dict) and step.get("uses") == "$/.github/actions/verify-pinned-actions"
+        if isinstance(step, dict) and step.get("uses") == PIN_VERIFICATION_ACTION
     ]
     if len(pin_steps) != 1:
         return False
@@ -1079,7 +1090,8 @@ def validate_permissions(root: Path) -> dict[str, Any]:
                     and trusted_context_producer
                 )
                 approved_delegation = (
-                    relative.as_posix() == BUILDKITE_BRIDGE_TEMPLATE_PATH
+                    relative.as_posix()
+                    in {BUILDKITE_BRIDGE_TEMPLATE_PATH, ORGANIZATION_REQUIRED_WORKFLOW_PATH}
                     and job_name == "buildkite_required"
                     and isinstance(job.get("uses"), str)
                     and REQUIRED_CHECK_CALL.fullmatch(job["uses"]) is not None
@@ -1309,8 +1321,8 @@ def _bounded_concurrency_errors(document: dict[str, Any], relative: Path) -> lis
         errors.append(
             f"{relative}: repository workflow concurrency group must include its stable pull-request/ref boundary"
         )
-    if concurrency.get("cancel-in-progress") is not True:
-        errors.append(f"{relative}: concurrency must cancel superseded in-progress runs")
+    if concurrency.get("cancel-in-progress") != "${{ github.event_name == 'pull_request' }}":
+        errors.append(f"{relative}: concurrency must cancel only pull_request runs")
     return errors
 
 
@@ -1357,8 +1369,8 @@ def _buildkite_bridge_errors(document: dict[str, Any], relative: Path) -> list[s
             errors.append(
                 f"{prefix} concurrency must bind repository, workflow, and stable pull-request/ref identity"
             )
-        if concurrency.get("cancel-in-progress") is not True:
-            errors.append(f"{prefix} must cancel superseded runs")
+        if concurrency.get("cancel-in-progress") != "${{ github.event_name == 'pull_request' }}":
+            errors.append(f"{prefix} must cancel only pull_request runs")
 
     jobs = document.get("jobs")
     if not isinstance(jobs, dict):
@@ -1558,6 +1570,99 @@ esac"""
     return errors
 
 
+def _organization_required_errors(document: dict[str, Any], relative: Path) -> list[str]:
+    if relative.as_posix() != ORGANIZATION_REQUIRED_WORKFLOW_PATH:
+        return []
+    prefix = f"{relative}: organization-required workflow"
+    errors: list[str] = []
+    if document.get("name") != "Pull request":
+        errors.append(f"{prefix} name must remain Pull request")
+    triggers = document.get("on")
+    expected_triggers = {
+        "pull_request": {
+            "types": [
+                "opened",
+                "reopened",
+                "synchronize",
+                "labeled",
+                "unlabeled",
+                "ready_for_review",
+            ]
+        },
+        "pull_request_review": {"types": ["submitted", "edited", "dismissed"]},
+        "merge_group": {"types": ["checks_requested"]},
+    }
+    if triggers != expected_triggers:
+        errors.append(
+            f"{prefix} triggers must include exact PR, review, label, and merge refreshes"
+        )
+    if document.get("permissions") != {}:
+        errors.append(f"{prefix} must deny permissions at workflow scope")
+    jobs = document.get("jobs")
+    expected_jobs = {
+        "profile",
+        "review_policy",
+        "nix_validation",
+        "classify",
+        "fork_checks",
+        "dispatch",
+        "buildkite_required",
+        "required",
+    }
+    if not isinstance(jobs, dict) or set(jobs) != expected_jobs:
+        errors.append(f"{prefix} must declare the exact fixed shard set")
+        return errors
+    profile = jobs["profile"]
+    if profile.get("if") != "${{ github.repository != '' }}" or profile.get("permissions") != {}:
+        errors.append(f"{prefix} profile must use the source-repository compatibility guard")
+    profile_steps = profile.get("steps")
+    profile_uses = [
+        step.get("uses")
+        for step in profile_steps or []
+        if isinstance(step, dict) and "uses" in step
+    ]
+    if profile_uses != [REQUIRED_PROFILE_ACTION]:
+        errors.append(f"{prefix} profile must use only the immutable fixed-profile action")
+    reusable_jobs = {
+        name: jobs[name]
+        for name in (
+            "nix_validation",
+            "classify",
+            "fork_checks",
+            "dispatch",
+            "buildkite_required",
+        )
+    }
+    revisions: set[str] = set()
+    for name, job in reusable_jobs.items():
+        reference = job.get("uses") if isinstance(job, dict) else None
+        if not isinstance(reference, str) or "@" not in reference:
+            errors.append(f"{prefix} shard {name} must call an immutable reusable workflow")
+            continue
+        revisions.add(reference.rsplit("@", 1)[1])
+    if len(revisions) != 1 or any(not SHA.fullmatch(revision) for revision in revisions):
+        errors.append(f"{prefix} every reusable shard must share one exact implementation SHA")
+    required = jobs["required"]
+    if (
+        required.get("name") != "required"
+        or required.get("if") != "always()"
+        or required.get("permissions") != {}
+        or set(required.get("needs", [])) != expected_jobs - {"required"}
+    ):
+        errors.append(f"{prefix} final required job must always aggregate every other shard")
+    steps = required.get("steps") if isinstance(required, dict) else None
+    run = steps[0].get("run") if isinstance(steps, list) and len(steps) == 1 else None
+    fail_closed_markers = (
+        'all($affected[]; $results[.] == "success")',
+        'all($not_required[]; $results[.] == "skipped")',
+        '[[ "${FORK_CHECKS_RESULT}" == skipped ]]',
+        '[[ "${TRUST_CLASSIFICATION}" == protected ]]',
+    )
+    if not isinstance(run, str) or any(marker not in run for marker in fail_closed_markers):
+        errors.append(f"{prefix} final required job must fail closed over every shard state")
+    return errors
+
+
 def _buildkite_dispatch_errors(document: dict[str, Any], relative: Path) -> list[str]:
     if relative.as_posix() != BUILDKITE_DISPATCH_WORKFLOW_PATH:
         return []
@@ -1707,6 +1812,7 @@ def validate_workflows(root: Path) -> dict[str, Any]:
         errors.extend(_bounded_concurrency_errors(document, relative))
         errors.extend(_buildkite_dispatch_errors(document, relative))
         errors.extend(_buildkite_bridge_errors(document, relative))
+        errors.extend(_organization_required_errors(document, relative))
         for _, key, value in _walk_yaml(document):
             if key == "run" and isinstance(value, str) and _run_uses_caller_inputs(value):
                 errors.append(
@@ -2151,6 +2257,7 @@ def validate_context_schema(
         errors.append("actor is invalid")
     if context.get("event_name") not in {
         "pull_request",
+        "pull_request_review",
         "push",
         "release",
         "schedule",
@@ -2182,10 +2289,10 @@ def validate_context_schema(
     if context.get("execution_tier") not in {"untrusted", "trusted", "release"}:
         errors.append("execution_tier is invalid")
     if (
-        context.get("event_name") in {"pull_request", "merge_group"}
+        context.get("event_name") in {"pull_request", "pull_request_review", "merge_group"}
         and context.get("execution_tier") != "untrusted"
     ):
-        errors.append("pull_request and merge_group must use untrusted execution tier")
+        errors.append("pull-request and merge-group events must use untrusted execution tier")
     if context.get("event_name") == "release" and (
         context.get("execution_tier") != "release"
         or context.get("source_trust") != "protected"
@@ -2227,7 +2334,7 @@ def trusted_context(
         or None
     )
     fork_provenance_ambiguous = False
-    if event_name == "pull_request":
+    if event_name in {"pull_request", "pull_request_review"}:
         head_repository = _nested(payload, "pull_request", "head", "repo")
         observed_fork = head_repository.get("fork") if isinstance(head_repository, dict) else None
         if type(observed_fork) is not bool:
@@ -2243,14 +2350,14 @@ def trusted_context(
     head_ref = _nested(payload, "pull_request", "head", "ref")
     context_ref = os.environ.get("GITHUB_REF", "")
     if (
-        event_name == "pull_request"
+        event_name in {"pull_request", "pull_request_review"}
         and isinstance(head_ref, str)
         and re.fullmatch(r"[A-Za-z0-9._/-]+", head_ref)
     ):
         context_ref = "refs/heads/" + head_ref
     ref_protected = os.environ.get("GITHUB_REF_PROTECTED", "").lower() == "true"
     release = payload.get("release") if isinstance(payload.get("release"), dict) else {}
-    if event_name in {"pull_request", "merge_group"}:
+    if event_name in {"pull_request", "pull_request_review", "merge_group"}:
         execution_tier = "untrusted"
     elif event_name == "release":
         execution_tier = "release"
@@ -2260,7 +2367,7 @@ def trusted_context(
         execution_tier = "untrusted"
     if event_name == "release":
         source_trust = "protected"
-    elif event_name == "pull_request":
+    elif event_name in {"pull_request", "pull_request_review"}:
         # A protected base ref says nothing about pull-request head
         # provenance, so it must never elevate the source classification.
         source_trust = "untrusted" if fork else "trusted"
