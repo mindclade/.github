@@ -247,7 +247,7 @@ class ReusableWorkflowContractTest(unittest.TestCase):
             previous_directory = Path.cwd()
             try:
                 os.chdir(root)
-                self.assertTrue(validator.validate_inventory(Path("."))["ok"])
+                self.assertTrue(validator.validate_inventory(Path())["ok"])
             finally:
                 os.chdir(previous_directory)
 
