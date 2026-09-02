@@ -56,7 +56,7 @@ DOCUMENTATION_REQUIRED_HEADINGS = {
     "profile/README.md": frozenset({"Activation boundary"}),
 }
 APPROVED_SCORECARD_WORKFLOW_SHA256 = (
-    "b8853d958f425c4b2c05de9ddec4ad64492767cc85558acad68b64d40c37693e"
+    "4700ac83ec6bb9242ae4fa47b5d10a510092a69781277630d3188f59d014770d"
 )
 COMMON_WORKFLOW_OUTPUTS = (
     "correlation_id",
@@ -1047,6 +1047,71 @@ def _has_trusted_context_producer(document: Any, jobs: Any) -> bool:
     )
 
 
+def _has_inline_trusted_context_gate(job: Any) -> bool:
+    """Recognise a job that gates itself instead of gating on a prepare job.
+
+    A separate prepare job proves trust before the guarded job starts, so no
+    write token exists until validation has already succeeded. A job that
+    validates itself holds its token from the first step, so it is accepted only
+    under a strictly narrower contract:
+
+      * the trusted-context action is step 0 and pins allowed-execution-tiers to
+        exactly "trusted,release", so the job can never execute on untrusted
+        input at all;
+      * pin verification is step 1;
+      * step 2 enforces both outcomes and carries no `if`, so it always runs and
+        fails the job before any later step;
+      * none of the three may be skipped, softened, or given an environment, and
+        the job itself carries no job-level env or container.
+
+    Every later step therefore runs only after both gates have passed. This is
+    the only shape in which a write permission may exist without a separate
+    producer job.
+    """
+    if not isinstance(job, dict):
+        return False
+    if job.get("continue-on-error", False) is not False:
+        return False
+    if job.get("runs-on") != "ubuntu-24.04" or "env" in job or "container" in job:
+        return False
+    steps = job.get("steps")
+    if not isinstance(steps, list) or len(steps) < 3:
+        return False
+    context, pins, enforce = steps[0], steps[1], steps[2]
+    for step in (context, pins, enforce):
+        if not isinstance(step, dict):
+            return False
+        if step.get("continue-on-error", False) is not False or "if" in step:
+            return False
+    if context.get("uses") != TRUSTED_CONTEXT_ACTION or context.get("id") != "context":
+        return False
+    context_inputs = context.get("with")
+    if not isinstance(context_inputs, dict):
+        return False
+    if context_inputs.get("expected-source-revision") != "${{ inputs.source_revision }}":
+        return False
+    # The narrowing that makes the inline form safe: the action itself rejects
+    # untrusted execution, so untrusted source never reaches any later step.
+    if context_inputs.get("allowed-execution-tiers") != "trusted,release":
+        return False
+    if pins.get("uses") != PIN_VERIFICATION_ACTION or pins.get("id") != "pins":
+        return False
+    if "with" in pins or "env" in pins:
+        return False
+    script = enforce.get("run")
+    enforce_env = enforce.get("env")
+    if not isinstance(script, str) or not isinstance(enforce_env, dict):
+        return False
+    if enforce_env.get("CONTEXT_OUTCOME") != "${{ steps.context.outcome }}":
+        return False
+    if enforce_env.get("PINS_OUTCOME") != "${{ steps.pins.outcome }}":
+        return False
+    return (
+        '[[ "${CONTEXT_OUTCOME}" == success ]]' in script
+        and '[[ "${PINS_OUTCOME}" == success ]]' in script
+    )
+
+
 def validate_permissions(root: Path) -> dict[str, Any]:
     errors: list[str] = []
     paths = files(
@@ -1089,7 +1154,7 @@ def validate_permissions(root: Path) -> dict[str, Any]:
                     "execution_tier" in condition
                     and _has_protected_tier_guard(condition)
                     and trusted_context_producer
-                )
+                ) or _has_inline_trusted_context_gate(job)
                 approved_delegation = (
                     relative.as_posix()
                     in {BUILDKITE_BRIDGE_TEMPLATE_PATH, ORGANIZATION_REQUIRED_WORKFLOW_PATH}

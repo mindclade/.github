@@ -49,47 +49,8 @@ concurrency:
 permissions: {}
 
 jobs:
-  prepare:
-    name: Mindclade / Scorecard Context
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    outputs:
-      context_json: ${{ steps.context.outputs.context_json }}
-      correlation_id: ${{ steps.context.outputs.correlation_id }}
-      source_revision: ${{ steps.context.outputs.source_revision }}
-      caller_repository: ${{ github.repository }}
-      trust_classification: ${{ steps.context.outputs.source_trust }}
-      execution_tier: ${{ steps.context.outputs.execution_tier }}
-      context_outcome: ${{ steps.context.outcome }}
-      context_reason: ${{ steps.context.outputs.reason_code }}
-      pins_outcome: ${{ steps.pins.outcome }}
-      pins_reason: ${{ steps.pins.outputs.reason_code }}
-    steps:
-      - id: context
-        name: Validate protected caller context
-        uses: mindclade/.github/.github/actions/validate-trusted-context@aabf14ba287eb3453cf9f42e19674df308564d1b
-        with:
-          expected-source-revision: ${{ inputs.source_revision }}
-          allowed-execution-tiers: trusted,release
-      - id: pins
-        name: Verify immutable implementation closure
-        uses: mindclade/.github/.github/actions/verify-pinned-actions@aabf14ba287eb3453cf9f42e19674df308564d1b
-      - name: Enforce protected preflight
-        if: always()
-        env:
-          CONTEXT_OUTCOME: ${{ steps.context.outcome }}
-          PINS_OUTCOME: ${{ steps.pins.outcome }}
-        run: |
-          set -euo pipefail
-          [[ "${CONTEXT_OUTCOME}" == success ]]
-          [[ "${PINS_OUTCOME}" == success ]]
-
   scorecard:
     name: Mindclade / OpenSSF Scorecard
-    needs: prepare
-    if: needs.prepare.result == 'success' && (needs.prepare.outputs.execution_tier == 'trusted' || needs.prepare.outputs.execution_tier == 'release')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -102,7 +63,39 @@ jobs:
       reason_code: ${{ steps.result.outputs.reason_code }}
       evidence_digest: ${{ steps.evidence.outputs.evidence_digest }}
       evidence_ref: ${{ steps.evidence.outputs.evidence_ref }}
+      context_json: ${{ steps.context.outputs.context_json }}
+      correlation_id: ${{ steps.context.outputs.correlation_id }}
+      source_revision: ${{ steps.context.outputs.source_revision }}
+      caller_repository: ${{ github.repository }}
+      trust_classification: ${{ steps.context.outputs.source_trust }}
+      execution_tier: ${{ steps.context.outputs.execution_tier }}
+      context_outcome: ${{ steps.context.outcome }}
+      context_reason: ${{ steps.context.outputs.reason_code }}
+      pins_outcome: ${{ steps.pins.outcome }}
+      pins_reason: ${{ steps.pins.outputs.reason_code }}
     steps:
+      # Steps 0, 1 and 2 are the inline trusted-context gate. The trusted-context
+      # action rejects anything but the trusted and release tiers, so this job
+      # cannot execute on untrusted input; pin verification and the enforcement
+      # step then run unconditionally before any third-party code. The shape is
+      # checked by validate_reusable_workflows._has_inline_trusted_context_gate.
+      - id: context
+        name: Validate protected caller context
+        uses: mindclade/.github/.github/actions/validate-trusted-context@aabf14ba287eb3453cf9f42e19674df308564d1b
+        with:
+          expected-source-revision: ${{ inputs.source_revision }}
+          allowed-execution-tiers: trusted,release
+      - id: pins
+        name: Verify immutable implementation closure
+        uses: mindclade/.github/.github/actions/verify-pinned-actions@aabf14ba287eb3453cf9f42e19674df308564d1b
+      - name: Enforce protected preflight before any third-party code runs
+        env:
+          CONTEXT_OUTCOME: ${{ steps.context.outcome }}
+          PINS_OUTCOME: ${{ steps.pins.outcome }}
+        run: |
+          set -euo pipefail
+          [[ "${CONTEXT_OUTCOME}" == success ]]
+          [[ "${PINS_OUTCOME}" == success ]]
       - id: checkout
         name: Check out exact protected revision
         continue-on-error: true
@@ -192,7 +185,7 @@ jobs:
         continue-on-error: true
         uses: mindclade/.github/.github/actions/publish-ci-evidence@aabf14ba287eb3453cf9f42e19674df308564d1b
         with:
-          context-json: ${{ needs.prepare.outputs.context_json }}
+          context-json: ${{ steps.context.outputs.context_json }}
           producer: github_actions
           conclusion: ${{ steps.result.outputs.conclusion }}
           reason-code: ${{ steps.result.outputs.reason_code }}
@@ -212,18 +205,18 @@ jobs:
 
   finalize:
     name: Mindclade / Scorecard Result
-    needs: [prepare, scorecard]
+    needs: scorecard
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
     outputs:
-      correlation_id: ${{ needs.prepare.outputs.correlation_id }}
-      source_revision: ${{ needs.prepare.outputs.source_revision }}
-      caller_repository: ${{ needs.prepare.outputs.caller_repository }}
-      trust_classification: ${{ needs.prepare.outputs.trust_classification }}
-      execution_tier: ${{ needs.prepare.outputs.execution_tier }}
+      correlation_id: ${{ needs.scorecard.outputs.correlation_id }}
+      source_revision: ${{ needs.scorecard.outputs.source_revision }}
+      caller_repository: ${{ needs.scorecard.outputs.caller_repository }}
+      trust_classification: ${{ needs.scorecard.outputs.trust_classification }}
+      execution_tier: ${{ needs.scorecard.outputs.execution_tier }}
       plan_id: scorecard-protected-v1
       build_id: ${{ github.run_id }}
       conclusion: ${{ steps.result.outputs.conclusion }}
@@ -234,11 +227,11 @@ jobs:
       - id: result
         name: Normalize final result
         env:
-          CONTEXT_OUTCOME: ${{ needs.prepare.outputs.context_outcome }}
-          CONTEXT_REASON: ${{ needs.prepare.outputs.context_reason }}
-          PINS_OUTCOME: ${{ needs.prepare.outputs.pins_outcome }}
-          PINS_REASON: ${{ needs.prepare.outputs.pins_reason }}
-          PREPARE_RESULT: ${{ needs.prepare.result }}
+          CONTEXT_OUTCOME: ${{ needs.scorecard.outputs.context_outcome }}
+          CONTEXT_REASON: ${{ needs.scorecard.outputs.context_reason }}
+          PINS_OUTCOME: ${{ needs.scorecard.outputs.pins_outcome }}
+          PINS_REASON: ${{ needs.scorecard.outputs.pins_reason }}
+          PREPARE_RESULT: ${{ needs.scorecard.result }}
           SCORECARD_CONCLUSION: ${{ needs.scorecard.outputs.conclusion }}
           SCORECARD_REASON: ${{ needs.scorecard.outputs.reason_code }}
           SCORECARD_RESULT: ${{ needs.scorecard.result }}
@@ -264,11 +257,11 @@ jobs:
           printf 'conclusion=%s\nreason_code=%s\n' "${conclusion}" "${reason}" >> "${GITHUB_OUTPUT}"
       - id: rejection_evidence
         name: Publish rejected-context evidence
-        if: needs.prepare.result != 'success' && needs.prepare.outputs.context_json != ''
+        if: needs.scorecard.result != 'success' && needs.scorecard.outputs.context_json != ''
         continue-on-error: true
         uses: mindclade/.github/.github/actions/publish-ci-evidence@aabf14ba287eb3453cf9f42e19674df308564d1b
         with:
-          context-json: ${{ needs.prepare.outputs.context_json }}
+          context-json: ${{ needs.scorecard.outputs.context_json }}
           producer: github_actions
           conclusion: ${{ steps.result.outputs.conclusion }}
           reason-code: ${{ steps.result.outputs.reason_code }}

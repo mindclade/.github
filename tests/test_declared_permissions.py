@@ -17,6 +17,81 @@ CONTEXT_USES = f"        uses: {validator.TRUSTED_CONTEXT_ACTION}\n"
 PINS_USES = f"        uses: {validator.PIN_VERIFICATION_ACTION}\n"
 
 
+class InlineTrustedContextGateTest(unittest.TestCase):
+    """A job may hold a write permission without a separate prepare job only if
+    it gates itself under a strictly narrower contract. These cases pin that
+    contract: every one of them would leave a write token reachable by code that
+    had not been trust-validated first."""
+
+    @staticmethod
+    def _valid_job() -> dict:
+        return {
+            "runs-on": "ubuntu-24.04",
+            "steps": [
+                {
+                    "id": "context",
+                    "uses": validator.TRUSTED_CONTEXT_ACTION,
+                    "with": {
+                        "expected-source-revision": "${{ inputs.source_revision }}",
+                        "allowed-execution-tiers": "trusted,release",
+                    },
+                },
+                {"id": "pins", "uses": validator.PIN_VERIFICATION_ACTION},
+                {
+                    "env": {
+                        "CONTEXT_OUTCOME": "${{ steps.context.outcome }}",
+                        "PINS_OUTCOME": "${{ steps.pins.outcome }}",
+                    },
+                    "run": (
+                        "set -euo pipefail\n"
+                        '[[ "${CONTEXT_OUTCOME}" == success ]]\n'
+                        '[[ "${PINS_OUTCOME}" == success ]]\n'
+                    ),
+                },
+                {"uses": "actions/checkout@" + "0" * 40},
+            ],
+        }
+
+    def test_the_approved_shape_is_accepted(self) -> None:
+        self.assertTrue(validator._has_inline_trusted_context_gate(self._valid_job()))
+
+    def test_every_weakening_is_rejected(self) -> None:
+        def admit_untrusted(job):
+            job["steps"][0]["with"]["allowed-execution-tiers"] = "untrusted,trusted,release"
+
+        def drop_tier_restriction(job):
+            job["steps"][0]["with"].pop("allowed-execution-tiers")
+
+        def step_before_gate(job):
+            job["steps"].insert(0, {"run": "echo arbitrary"})
+
+        cases = {
+            "untrusted execution admitted": admit_untrusted,
+            "no execution-tier restriction": drop_tier_restriction,
+            "arbitrary step ahead of the gate": step_before_gate,
+            "context step soft-failed": lambda j: j["steps"][0].__setitem__("continue-on-error", True),
+            "pin step soft-failed": lambda j: j["steps"][1].__setitem__("continue-on-error", True),
+            "context step made conditional": lambda j: j["steps"][0].__setitem__("if", "false"),
+            "enforcement made conditional": lambda j: j["steps"][2].__setitem__("if", "always()"),
+            "job-level env introduced": lambda j: j.__setitem__("env", {"X": "1"}),
+            "job container introduced": lambda j: j.__setitem__("container", {"image": "x"}),
+            "enforcement assertions removed": lambda j: j["steps"][2].__setitem__("run", "true"),
+            "pins outcome unwired": lambda j: j["steps"][2]["env"].pop("PINS_OUTCOME"),
+            "pin verification swapped": lambda j: j["steps"].__setitem__(
+                1, {"id": "pins", "uses": "evil/action@" + "0" * 40}
+            ),
+            "runner changed": lambda j: j.__setitem__("runs-on", "self-hosted"),
+        }
+        for label, mutate in cases.items():
+            with self.subTest(weakening=label):
+                job = self._valid_job()
+                mutate(job)
+                self.assertFalse(
+                    validator._has_inline_trusted_context_gate(job),
+                    f"{label} must not be accepted as a trusted-context gate",
+                )
+
+
 class DeclaredPermissionsTest(unittest.TestCase):
     def test_real_repository_permission_blocks_follow_the_allowlist(self) -> None:
         outcome = validator.validate_permissions(ROOT)
